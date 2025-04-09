@@ -195,33 +195,30 @@ public class AutoClothingGenerator : EditorWindow
 
         AssetDatabase.CreateAsset(mat, $"{baseFolder}/{fileName}_Mat.mat");
 
-        GameObject clothingObj;
-
-        if (selectedMesh)
-        {
-            clothingObj = new GameObject(fileName, typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider));
-            clothingObj.GetComponent<MeshFilter>().sharedMesh = selectedMesh;
-            clothingObj.GetComponent<MeshRenderer>().sharedMaterial = mat;
-            clothingObj.GetComponent<MeshCollider>().sharedMesh = selectedMesh;
-        }
-        else
-        {
-            clothingObj = GameObject.CreatePrimitive(PrimitiveType.Quad);
-            var meshFilter = clothingObj.GetComponent<MeshFilter>();
-            var meshCollider = clothingObj.AddComponent<MeshCollider>();
-            meshCollider.sharedMesh = meshFilter.sharedMesh;
-            clothingObj.GetComponent<Renderer>().sharedMaterial = mat;
-        }
+        GameObject clothingObj = selectedMesh
+            ? new GameObject(fileName, typeof(MeshFilter), typeof(MeshRenderer))
+            : GameObject.CreatePrimitive(PrimitiveType.Quad);
 
         clothingObj.name = fileName;
         clothingObj.layer = itemLayer;
         clothingObj.tag = "Item";
 
+        if (selectedMesh)
+        {
+            clothingObj.GetComponent<MeshFilter>().sharedMesh = selectedMesh;
+            clothingObj.GetComponent<MeshRenderer>().sharedMaterial = mat;
+            clothingObj.AddComponent<BoxCollider>();
+        }
+        else
+        {
+            clothingObj.GetComponent<Renderer>().sharedMaterial = mat;
+        }
+
         GameObject icon = new GameObject("Icon");
         icon.transform.SetParent(clothingObj.transform);
         icon.transform.localPosition = new Vector3(0, 0, 0.5f);
         icon.transform.LookAt(clothingObj.transform);
-        icon.transform.Rotate(0, 180, 90);
+        icon.transform.Rotate(0, 90, 0);
         icon.layer = itemLayer;
         icon.tag = "Item";
 
