@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEditor;
 using System.IO;
 using System.Linq;
@@ -49,7 +49,6 @@ public class AutoClothingGenerator : EditorWindow
     {
         GUILayout.Label("Clothing Generator Tool", EditorStyles.boldLabel);
 
-        // Dropdown for selecting "Single" or "Multiple"
         selectionMode = (SelectionMode)EditorGUILayout.EnumPopup("Generation Mode", selectionMode);
 
         if (selectionMode == SelectionMode.Multiple)
@@ -66,9 +65,7 @@ public class AutoClothingGenerator : EditorWindow
         }
         else
         {
-            // Use the ObjectField to select a single texture
-            Texture2D selectedTexture = (Texture2D)EditorGUILayout.ObjectField("PNG Texture",
-                AssetDatabase.LoadAssetAtPath<Texture2D>(singleTexturePath), typeof(Texture2D), false);
+            Texture2D selectedTexture = (Texture2D)EditorGUILayout.ObjectField("PNG Texture", AssetDatabase.LoadAssetAtPath<Texture2D>(singleTexturePath), typeof(Texture2D), false);
 
             if (selectedTexture != null)
             {
@@ -154,11 +151,9 @@ public class AutoClothingGenerator : EditorWindow
         string originalPath = AssetDatabase.GetAssetPath(selectedTexture);
         string fileName = Path.GetFileNameWithoutExtension(originalPath);
 
-        // Create appropriate subfolder (Shirts or Pants)
         string baseFolder = $"Assets/Clothing/{(clothingType == ClothingType.Shirt ? "Shirts" : "Pants")}/{fileName}";
         string imageName = clothingType == ClothingType.Shirt ? "shirt.png" : "pants.png";
 
-        // Ensure the base folder exists, create if not
         if (!AssetDatabase.IsValidFolder($"Assets/Clothing/{(clothingType == ClothingType.Shirt ? "Shirts" : "Pants")}"))
         {
             AssetDatabase.CreateFolder("Assets/Clothing", clothingType == ClothingType.Shirt ? "Shirts" : "Pants");
@@ -185,7 +180,6 @@ public class AutoClothingGenerator : EditorWindow
 
         Texture2D copiedTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(newImagePath);
 
-        // Create and configure Cutout material
         Material mat = new Material(Shader.Find("Standard"));
         mat.mainTexture = copiedTexture;
         mat.SetFloat("_Mode", 1);
@@ -201,29 +195,33 @@ public class AutoClothingGenerator : EditorWindow
 
         AssetDatabase.CreateAsset(mat, $"{baseFolder}/{fileName}_Mat.mat");
 
-        // Create clothing prefab
-        GameObject clothingObj = selectedMesh
-            ? new GameObject(fileName, typeof(MeshFilter), typeof(MeshRenderer))
-            : GameObject.CreatePrimitive(PrimitiveType.Quad);
+        GameObject clothingObj;
+
+        if (selectedMesh)
+        {
+            clothingObj = new GameObject(fileName, typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider));
+            clothingObj.GetComponent<MeshFilter>().sharedMesh = selectedMesh;
+            clothingObj.GetComponent<MeshRenderer>().sharedMaterial = mat;
+            clothingObj.GetComponent<MeshCollider>().sharedMesh = selectedMesh;
+        }
+        else
+        {
+            clothingObj = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            var meshFilter = clothingObj.GetComponent<MeshFilter>();
+            var meshCollider = clothingObj.AddComponent<MeshCollider>();
+            meshCollider.sharedMesh = meshFilter.sharedMesh;
+            clothingObj.GetComponent<Renderer>().sharedMaterial = mat;
+        }
 
         clothingObj.name = fileName;
         clothingObj.layer = itemLayer;
         clothingObj.tag = "Item";
 
-        if (selectedMesh)
-        {
-            clothingObj.GetComponent<MeshFilter>().sharedMesh = selectedMesh;
-            clothingObj.GetComponent<MeshRenderer>().sharedMaterial = mat;
-        }
-        else
-        {
-            clothingObj.GetComponent<Renderer>().sharedMaterial = mat;
-        }
-
         GameObject icon = new GameObject("Icon");
         icon.transform.SetParent(clothingObj.transform);
         icon.transform.localPosition = new Vector3(0, 0, 0.5f);
         icon.transform.LookAt(clothingObj.transform);
+        icon.transform.Rotate(0, 180, 90);
         icon.layer = itemLayer;
         icon.tag = "Item";
 
