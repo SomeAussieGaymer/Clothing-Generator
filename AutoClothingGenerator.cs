@@ -2,6 +2,9 @@ using UnityEngine;
 using UnityEditor;
 using System.IO;
 using System.Linq;
+using System.Collections;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 
 public class AutoClothingGenerator : EditorWindow
 {
@@ -17,7 +20,7 @@ public class AutoClothingGenerator : EditorWindow
     private PreviewRenderUtility previewRenderUtility;
     private GameObject previewInstance;
     private Material previewMaterial;
-    private Vector2 previewEulerAngles = new Vector2(30f, 0f); 
+    private Vector2 previewEulerAngles = new Vector2(30f, 0f);
     private const string PREFS_PREFIX = "ClothingGen_";
     private const string BASE_FOLDER_PATH = "Assets/Clothing";
     private static readonly int MATERIAL_MODE = Shader.PropertyToID("_Mode");
@@ -25,6 +28,13 @@ public class AutoClothingGenerator : EditorWindow
     private static readonly int MATERIAL_SRC_BLEND = Shader.PropertyToID("_SrcBlend");
     private static readonly int MATERIAL_DST_BLEND = Shader.PropertyToID("_DstBlend");
     private static readonly int MATERIAL_ZWRITE = Shader.PropertyToID("_ZWrite");
+
+
+    private bool isProcessing = false;
+    private float progress = 0f;
+    private int totalFiles = 0;
+    private int processedFiles = 0;
+    private string currentFileName = "";
 
     [MenuItem("Tools/Clothing Generator")]
     public static void ShowWindow()
@@ -43,6 +53,7 @@ public class AutoClothingGenerator : EditorWindow
         selectionMode = (SelectionMode)EditorPrefs.GetInt($"{PREFS_PREFIX}SelectionMode", 1);
         previewRenderUtility = new PreviewRenderUtility();
         previewRenderUtility.cameraFieldOfView = 60f;
+        EditorApplication.update += Repaint;
     }
 
     private void OnDisable()
@@ -68,11 +79,19 @@ public class AutoClothingGenerator : EditorWindow
         {
             DestroyImmediate(previewMaterial);
         }
+        EditorApplication.update -= Repaint;
     }
 
     private void OnGUI()
     {
         GUILayout.Label("Clothing Generator Tool", EditorStyles.boldLabel);
+
+        if (isProcessing)
+        {
+            DisplayProgressBar();
+            return;
+        }
+
         clothingType = (ClothingType)EditorGUILayout.EnumPopup("Item Type", clothingType);
         selectionMode = (SelectionMode)EditorGUILayout.EnumPopup("Selection Mode", selectionMode);
         switch (selectionMode)
@@ -106,12 +125,27 @@ public class AutoClothingGenerator : EditorWindow
             switch (selectionMode)
             {
                 case SelectionMode.Multiple:
-                    GenerateAllClothingFromFolder();
+                    StartGeneratingAllClothingFromFolder();
                     break;
                 case SelectionMode.Single:
                     GenerateClothingFromSingle();
                     break;
             }
+        }
+    }
+
+    private void DisplayProgressBar()
+    {
+        EditorGUILayout.HelpBox($"Processing {currentFileName}", MessageType.Info);
+
+        Rect progressRect = EditorGUILayout.GetControlRect(false, 20);
+        EditorGUI.ProgressBar(progressRect, progress, $"Processing {processedFiles}/{totalFiles}");
+
+        if (GUILayout.Button("Cancel"))
+        {
+            isProcessing = false;
+            EditorUtility.ClearProgressBar();
+            Debug.Log("Clothing generation canceled.");
         }
     }
 
@@ -187,11 +221,11 @@ public class AutoClothingGenerator : EditorWindow
         previewRenderUtility.camera.nearClipPlane = 0.1f;
         previewRenderUtility.camera.farClipPlane = 100f;
 
-       
-        previewRenderUtility.camera.clearFlags = CameraClearFlags.Color;
-        previewRenderUtility.camera.backgroundColor = new Color(0.2f, 0.2f, 0.2f, 1.0f); 
 
-   
+        previewRenderUtility.camera.clearFlags = CameraClearFlags.Color;
+        previewRenderUtility.camera.backgroundColor = new Color(0.2f, 0.2f, 0.2f, 1.0f);
+
+
         previewRenderUtility.lights[0].type = LightType.Directional;
         previewRenderUtility.lights[0].intensity = 1.4f;
         previewRenderUtility.lights[0].transform.rotation = Quaternion.Euler(50f, 50f, 0);
@@ -200,12 +234,12 @@ public class AutoClothingGenerator : EditorWindow
         previewRenderUtility.lights[1].type = LightType.Point;
         previewRenderUtility.lights[1].intensity = 0.7f;
         previewRenderUtility.lights[1].transform.position = new Vector3(0, -3, -2);
-        previewRenderUtility.lights[1].color = new Color(0.7f, 0.7f, 0.8f); 
+        previewRenderUtility.lights[1].color = new Color(0.7f, 0.7f, 0.8f);
 
- 
+
         Quaternion objectRotation = Quaternion.Euler(previewEulerAngles.y, previewEulerAngles.x, 0);
 
-        if (EditorApplication.timeSinceStartup % 10 < 5) 
+        if (EditorApplication.timeSinceStartup % 10 < 5)
         {
             float angle = Mathf.Sin((float)(EditorApplication.timeSinceStartup * 0.5f)) * 5f;
             objectRotation *= Quaternion.Euler(0, angle, 0);
@@ -234,14 +268,14 @@ public class AutoClothingGenerator : EditorWindow
 
     private void UpdatePreviewMaterial(Texture2D texture)
     {
-     
+
         if (previewMaterial == null)
         {
             previewMaterial = new Material(Shader.Find("Standard"));
         }
 
         previewMaterial.mainTexture = texture;
-        previewMaterial.SetFloat(MATERIAL_MODE, 1); 
+        previewMaterial.SetFloat(MATERIAL_MODE, 1);
         previewMaterial.SetOverrideTag("RenderType", "TransparentCutout");
         previewMaterial.SetInt(MATERIAL_SRC_BLEND, (int)UnityEngine.Rendering.BlendMode.One);
         previewMaterial.SetInt(MATERIAL_DST_BLEND, (int)UnityEngine.Rendering.BlendMode.Zero);
@@ -252,10 +286,10 @@ public class AutoClothingGenerator : EditorWindow
         previewMaterial.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
         previewMaterial.SetFloat(MATERIAL_CUTOFF, 0.5f);
 
-       
+
         previewMaterial.EnableKeyword("_EMISSION");
-        previewMaterial.SetColor("_EmissionColor", Color.white * 0.1f); 
-        previewMaterial.SetFloat("_Glossiness", 0.2f); 
+        previewMaterial.SetColor("_EmissionColor", Color.white * 0.1f);
+        previewMaterial.SetFloat("_Glossiness", 0.2f);
     }
 
     private void SetupPreviewInstance(Mesh mesh, Material material)
@@ -277,25 +311,68 @@ public class AutoClothingGenerator : EditorWindow
         mr.sharedMaterial = material;
     }
 
-    private void GenerateAllClothingFromFolder()
+    private void StartGeneratingAllClothingFromFolder()
     {
-        string[] pngPaths = Directory.GetFiles(textureFolderPath, "*.png");
-        if (pngPaths.Length == 0)
+        Task.Run(() => Directory.GetFiles(textureFolderPath, "*.png", SearchOption.AllDirectories))
+            .ContinueWith(task =>
+            {
+                string[] pngPaths = task.Result;
+                if (pngPaths.Length == 0)
+                {
+                    Debug.LogWarning("No PNG files found in selected folder.");
+                    return;
+                }
+                EditorCoroutine.Start(GenerateClothingAsync(pngPaths));
+            });
+    }
+
+    private IEnumerator GenerateClothingAsync(string[] pngPaths)
+    {
+        isProcessing = true;
+        totalFiles = pngPaths.Length;
+        processedFiles = 0;
+        progress = 0f;
+        EnsureTagExists("Item");
+        EnsureLayerExists("Item");
+        EnsureTagExists("Logic");
+        EnsureLayerExists("Logic");
+
+        if (RequiresEnemyTagLayer(clothingType))
         {
-            Debug.LogWarning("No PNG files found in selected folder.");
-            return;
+            EnsureTagExists("Enemy");
+            EnsureLayerExists("Enemy");
         }
 
         foreach (var path in pngPaths)
         {
-            Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
-            if (tex != null)
-                GenerateClothing(tex);
-        }
+            if (!isProcessing)
+                break;
 
+            currentFileName = Path.GetFileNameWithoutExtension(path);
+            Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            if (tex == null)
+            {
+                processedFiles++;
+                progress = (float)processedFiles / totalFiles;
+                continue;
+            }
+
+            GenerateClothing(tex);
+
+            processedFiles++;
+            progress = (float)processedFiles / totalFiles;
+            yield return null;
+            if (processedFiles % 10 == 0 || processedFiles == totalFiles)
+            {
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+            }
+        }
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
-        Debug.Log($"✅ Generated {pngPaths.Length} clothing item(s).");
+
+        isProcessing = false;
+        Debug.Log($"✅ Generated {processedFiles} clothing item(s).");
     }
 
     private void GenerateClothingFromSingle()
@@ -321,13 +398,11 @@ public class AutoClothingGenerator : EditorWindow
 
     private void GenerateClothing(Texture2D selectedTexture)
     {
-   
         EnsureTagExists("Item");
         EnsureLayerExists("Item");
         EnsureTagExists("Logic");
         EnsureLayerExists("Logic");
 
-    
         if (RequiresEnemyTagLayer(clothingType))
         {
             EnsureTagExists("Enemy");
@@ -344,27 +419,21 @@ public class AutoClothingGenerator : EditorWindow
         ClothingTypeInfo typeInfo = GetClothingTypeInfo(clothingType);
         string baseFolder = $"{BASE_FOLDER_PATH}/{typeInfo.FolderName}/{fileName}";
 
-    
         CreateFolderStructure(typeInfo.FolderName, fileName);
 
         string newImagePath = $"{baseFolder}/{typeInfo.ImageName}";
         CopyAndConfigureTexture(originalPath, newImagePath);
 
         Texture2D copiedTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(newImagePath);
-
-
         Material mat = CreateMaterial(copiedTexture, $"{baseFolder}/{fileName}_Mat.mat");
 
-    
         GameObject clothingObj = CreateClothingObject(fileName, itemLayer, mat);
         string prefabPath = AssetDatabase.GenerateUniqueAssetPath($"{baseFolder}/Item.prefab");
         PrefabUtility.SaveAsPrefabAsset(clothingObj, prefabPath);
         DestroyImmediate(clothingObj);
 
-  
         CreateAnimationPrefab(baseFolder, logicLayer);
 
-        
         if (RequiresEnemyTagLayer(clothingType))
         {
             CreateSpecialTypeItem(clothingType, fileName, enemyLayer, mat, baseFolder);
@@ -607,6 +676,28 @@ public class AutoClothingGenerator : EditorWindow
                     break;
                 }
             }
+        }
+    }
+}
+public static class EditorCoroutine
+{
+    public class Coroutine
+    {
+        public IEnumerator routine;
+    }
+
+    public static Coroutine Start(IEnumerator routine)
+    {
+        Coroutine coroutine = new Coroutine { routine = routine };
+        EditorApplication.update += () => UpdateCoroutine(coroutine);
+        return coroutine;
+    }
+
+    private static void UpdateCoroutine(Coroutine coroutine)
+    {
+        if (coroutine.routine.MoveNext() == false)
+        {
+            EditorApplication.update -= () => UpdateCoroutine(coroutine);
         }
     }
 }
