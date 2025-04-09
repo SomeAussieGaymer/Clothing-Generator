@@ -217,8 +217,7 @@ public class AutoClothingGenerator : EditorWindow
         GameObject icon = new GameObject("Icon");
         icon.transform.SetParent(clothingObj.transform);
         icon.transform.localPosition = new Vector3(0, 0, 0.5f);
-        icon.transform.LookAt(clothingObj.transform);
-        icon.transform.Rotate(0, 180, 90);
+        icon.transform.localRotation = Quaternion.Euler(0f, 180f, 90f);
         icon.layer = itemLayer;
         icon.tag = "Item";
 
