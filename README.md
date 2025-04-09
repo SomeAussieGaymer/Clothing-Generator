@@ -1,25 +1,89 @@
-# Auto Clothing Generator for Unity
+# 🧥 AutoClothingGenerator for Unity
 
-This Unity editor tool allows users to generate clothing items (such as shirts and pants) for characters, along with optional animations. The tool simplifies the process of creating clothing items by supporting both single and batch generation from texture files. The clothing items can be automatically organized into their respective folders (Shirts or Pants) and are generated with the appropriate material and prefab configurations.
+**AutoClothingGenerator** is a Unity Editor tool built for Unturned modders and content creators. It streamlines the process of generating clothing items—complete with textures, animations, prefabs, and preview functionality.
 
-## Features:
-- **Single or Multiple Texture Generation**: Choose to generate clothing from a single PNG file or from all PNG files in a selected folder.
-- **Custom Mesh Support**: Optionally specify a custom mesh for the clothing items, or use a default primitive (Quad) for basic items.
-- **Cutout Material**: Automatically generates a material for the clothing items with a Cutout shader for transparent effects.
-- **Animation Support**: Attach up to two optional animations to the clothing items for use in character movements.
-- **Organized Folder Structure**: Generated items are saved into a structured folder system (Shirts or Pants), making it easy to manage your assets.
+---
 
-## Installation:
-1. Download or clone the repository.
-2. Place the `AutoClothingGenerator.cs` script inside the `Editor` folder of your Unity project.
-3. Access the tool through `Tools > Clothing Generator` in the Unity Editor menu.
+## ✨ Features
 
-## Usage:
-1. Select the texture or folder containing your texture files (PNG format).
-2. Choose between generating a single clothing item or processing multiple items from a folder.
-3. Optionally, configure a custom mesh and animations for the clothing item.
-4. Click **Generate Clothing** to create your item, which will automatically be placed in the appropriate folder based on your selection (Shirts or Pants).
+- 🎨 **Batch or Single Texture Support** — Import clothing textures from a folder or single PNG.
+- 🧵 **Multiple Clothing Types** — Shirt, Pants, Vest, Hat, Glasses, Mask, Backpack.
+- ⚙️ **Auto Material Setup** — Transparent cutout material using Unity’s Standard Shader.
+- 🔁 **Animation Integration** — Automatically include Equip and Use animations.
+- 👀 **Live 3D Preview** — Preview selected texture and mesh in real time.
+- 📁 **Auto Folder & Asset Generation** — Organized output with proper naming and structure.
+- 🏷️ **Tag & Layer Management** — Automatically ensures required Unity tags and layers exist.
 
-## License:
-This project is licensed under the [MIT License](LICENSE), meaning you are free to use, modify, and distribute the code with proper attribution. However, the software is provided **"as is"** without any warranty of any kind, express or implied. Use it at your own risk.
+---
+
+## 🧩 Installation
+
+1. Download or clone this repository.
+2. Place `AutoClothingGenerator.cs` inside an `Editor` folder in your Unity project.
+3. Open Unity and go to **`Tools > Clothing Generator`** in the top menu.
+
+---
+
+## 🚀 Usage Guide
+
+### 1. Open the Tool
+`Tools > Clothing Generator` from the Unity menu bar.
+
+### 2. Configure Settings
+- **Clothing Type**: Choose from 7 categories.
+- **Mode**:
+  - `Multiple`: Generate items from all PNGs in a folder.
+  - `Single`: Generate one item from a selected PNG texture.
+- **Optional Assets**:
+  - Mesh
+  - Equip Animation
+  - Use Animation
+
+### 3. Preview (Single Mode Only)
+Preview the item with 3D mesh and lighting.
+
+### 4. Click `Generate Item`
+The tool will:
+- Create folders and assets
+- Configure tags/layers
+- Create prefabs
+- Save all changes automatically
+
+---
+
+## 🛠️ Requirements
+
+- Unity 2020 or later
+- PNG format for textures
+- Optional mesh and animation clips
+
+---
+
+## 📸 Preview
+
+_3D preview window with drag-to-rotate functionality (only available in Single Mode)._
+
+---
+
+## ⚠️ Notes
+
+- Mesh is optional; defaults to Unity's Quad if none is provided.
+- Animations are not required but will generate logic prefabs if assigned.
+- The tool modifies Unity tags and layers (`Item`, `Logic`, `Enemy`) if missing.
+
+---
+
+## 📜 License
+
+MIT License  
+Feel free to use, modify, and share!
+
+---
+
+## 🤝 Contributing
+
+Pull requests and suggestions are welcome.  
+If you find a bug or have an idea, open an issue.
+
+---
 
