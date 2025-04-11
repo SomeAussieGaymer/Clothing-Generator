@@ -1,89 +1,93 @@
-# 🧥 AutoClothingGenerator for Unity
+# Unity Clothing Generator
 
-**AutoClothingGenerator** is a Unity Editor tool built for Unturned modders and content creators. It streamlines the process of generating clothing items—complete with textures, animations, prefabs, and preview functionality.
+A powerful Unity Editor tool for quickly generating and previewing in-game clothing and accessory items.
 
----
+## Overview
 
-## ✨ Features
+The Auto Clothing Generator is a comprehensive Unity Editor extension designed to streamline the creation of various clothing items and accessories for your games. This tool automates the process of generating properly configured meshes, materials, prefabs, and animations for different types of wearable items.
 
-- 🎨 **Batch or Single Texture Support** — Import clothing textures from a folder or single PNG.
-- 🧵 **Multiple Clothing Types** — Shirt, Pants, Vest, Hat, Glasses, Mask, Backpack.
-- ⚙️ **Auto Material Setup** — Transparent cutout material using Unity’s Standard Shader.
-- 🔁 **Animation Integration** — Automatically include Equip and Use animations.
-- 👀 **Live 3D Preview** — Preview selected texture and mesh in real time.
-- 📁 **Auto Folder & Asset Generation** — Organized output with proper naming and structure.
-- 🏷️ **Tag & Layer Management** — Automatically ensures required Unity tags and layers exist.
+## Features
 
----
+- **Multiple Item Types**: Generate various item types including shirts, pants, vests, hats, glasses, masks, and backpacks
+- **Batch Processing**: Process multiple textures at once from a specified folder
+- **Advanced Preview System**: 
+  - Multi-view mode to see your items from different angles
+  - Perspective view with rotate, pan, and zoom controls
+  - Custom background colors and images
+  - Preview export functionality
+- **Material Configuration**: Automatically sets up materials with proper transparency settings
+- **Animation Support**: Associate equip and use animations with your items
+- **Prefab Generation**: Creates properly tagged and layered prefabs ready for game implementation
+- **Custom Icon Placement**: Position item icons based on camera view
 
-## 🧩 Installation
+## Installation
 
-1. Download or clone this repository.
-2. Place `AutoClothingGenerator.cs` inside an `Editor` folder in your Unity project.
-3. Open Unity and go to **`Tools > Clothing Generator`** in the top menu.
+1. Copy the `AutoClothingGenerator.cs` script into your Unity project's `Editor` folder
+2. In Unity, navigate to `Tools > Clothing Generator` to open the tool
 
----
+## Usage
 
-## 🚀 Usage Guide
+### Basic Workflow
 
-### 1. Open the Tool
-`Tools > Clothing Generator` from the Unity menu bar.
+1. Select the item type (shirt, pants, hat, etc.)
+2. Choose between single or multiple selection mode
+3. Select your texture(s)
+4. Assign a mesh (or use the default quad)
+5. Optional: Add equip and use animations
+6. Click "Generate Item" to create your clothing assets
 
-### 2. Configure Settings
-- **Clothing Type**: Choose from 7 categories.
-- **Mode**:
-  - `Multiple`: Generate items from all PNGs in a folder.
-  - `Single`: Generate one item from a selected PNG texture.
-- **Optional Assets**:
-  - Mesh
-  - Equip Animation
-  - Use Animation
+### Selection Modes
 
-### 3. Preview (Single Mode Only)
-Preview the item with 3D mesh and lighting.
+- **Single Mode**: Process one specific texture
+- **Multiple Mode**: Batch process all textures in a selected folder
 
-### 4. Click `Generate Item`
-The tool will:
-- Create folders and assets
-- Configure tags/layers
-- Create prefabs
-- Save all changes automatically
+### Preview Controls
 
----
+- **Perspective View**: 
+  - Left-click and drag to rotate
+  - Middle-click and drag to pan
+  - Scroll wheel to zoom
+- **View Modes**:
+  - Single View: Shows one selected angle
+  - Multi View: Shows the item from multiple angles simultaneously
 
-## 🛠️ Requirements
+## Generated Assets
 
-- Unity 2020 or later
-- PNG format for textures
-- Optional mesh and animation clips
+For each processed item, the tool creates:
+- A properly configured texture
+- A material with appropriate transparency settings
+- A prefab with the correct tags and layers
+- Animation prefabs (if animations are provided)
+- Special type prefabs for appropriate item types
 
----
+## Structure
 
-## 📸 Preview
+The generated assets are organized into the following folder structure:
+```
+Assets/Clothing/
+  ├── Shirts/
+  │   └── [ItemName]/
+  │       ├── shirt.png
+  │       ├── [ItemName]_Mat.mat
+  │       ├── Item.prefab
+  │       └── Animations.prefab (if animations provided)
+  ├── Pants/
+  │   └── [ItemName]/
+  │       └── ...
+  └── ...
+```
 
-_3D preview window with drag-to-rotate functionality (only available in Single Mode)._
+## Requirements
 
----
+- Unity 2019.4 or higher
+- The tool uses Unity's built-in rendering pipeline with the Standard shader
 
-## ⚠️ Notes
+## Tips
 
-- Mesh is optional; defaults to Unity's Quad if none is provided.
-- Animations are not required but will generate logic prefabs if assigned.
-- The tool modifies Unity tags and layers (`Item`, `Logic`, `Enemy`) if missing.
+- For best results, use transparent PNG files with alpha channels
+- Organize your source textures in a dedicated folder for easy batch processing
+- Use the preview system to check how items will look in-game before generating them
 
----
+## License
 
-## 📜 License
-
-MIT License  
-Feel free to use, modify, and share!
-
----
-
-## 🤝 Contributing
-
-Pull requests and suggestions are welcome.  
-If you find a bug or have an idea, open an issue.
-
----
-
+This tool is available under the MIT License. See the LICENSE file for details.
