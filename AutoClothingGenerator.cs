@@ -1,703 +1,1343 @@
-using UnityEngine;
-using UnityEditor;
-using System.IO;
-using System.Linq;
-using System.Collections;
-using System.Collections.Generic;
-using System.Threading.Tasks;
+    using UnityEngine;
+    using UnityEditor;
+    using System;
+    using System.IO;
+    using System.Linq;
+    using System.Collections;
+    using System.Collections.Generic;
+    using System.Threading;
+    using System.Threading.Tasks;
 
-public class AutoClothingGenerator : EditorWindow
-{
-    private enum ClothingType { Shirt, Pants, Vest, Hat, Glasses, Mask, Backpack }
-    private ClothingType clothingType = ClothingType.Shirt;
-    private enum SelectionMode { Single, Multiple }
-    private SelectionMode selectionMode = SelectionMode.Multiple;
-    private string textureFolderPath = "Assets";
-    private string singleTexturePath = "";
-    private Mesh selectedMesh;
-    private AnimationClip equipAnimation;
-    private AnimationClip useAnimation;
-    private PreviewRenderUtility previewRenderUtility;
-    private GameObject previewInstance;
-    private Material previewMaterial;
-    private Vector2 previewEulerAngles = new Vector2(30f, 0f);
-    private const string PREFS_PREFIX = "ClothingGen_";
-    private const string BASE_FOLDER_PATH = "Assets/Clothing";
-    private static readonly int MATERIAL_MODE = Shader.PropertyToID("_Mode");
-    private static readonly int MATERIAL_CUTOFF = Shader.PropertyToID("_Cutoff");
-    private static readonly int MATERIAL_SRC_BLEND = Shader.PropertyToID("_SrcBlend");
-    private static readonly int MATERIAL_DST_BLEND = Shader.PropertyToID("_DstBlend");
-    private static readonly int MATERIAL_ZWRITE = Shader.PropertyToID("_ZWrite");
-
-
-    private bool isProcessing = false;
-    private float progress = 0f;
-    private int totalFiles = 0;
-    private int processedFiles = 0;
-    private string currentFileName = "";
-
-    [MenuItem("Tools/Clothing Generator")]
-    public static void ShowWindow()
+    public class AutoClothingGenerator : EditorWindow
     {
-        GetWindow<AutoClothingGenerator>("Clothing Generator");
-    }
-
-    private void OnEnable()
-    {
-        textureFolderPath = EditorPrefs.GetString($"{PREFS_PREFIX}TextureFolder", "Assets");
-        singleTexturePath = EditorPrefs.GetString($"{PREFS_PREFIX}SingleTexture", "");
-        clothingType = (ClothingType)EditorPrefs.GetInt($"{PREFS_PREFIX}Type", 0);
-        selectedMesh = AssetDatabase.LoadAssetAtPath<Mesh>(EditorPrefs.GetString($"{PREFS_PREFIX}MeshPath", ""));
-        equipAnimation = AssetDatabase.LoadAssetAtPath<AnimationClip>(EditorPrefs.GetString($"{PREFS_PREFIX}EquipAnimPath", ""));
-        useAnimation = AssetDatabase.LoadAssetAtPath<AnimationClip>(EditorPrefs.GetString($"{PREFS_PREFIX}UseAnimPath", ""));
-        selectionMode = (SelectionMode)EditorPrefs.GetInt($"{PREFS_PREFIX}SelectionMode", 1);
-        previewRenderUtility = new PreviewRenderUtility();
-        previewRenderUtility.cameraFieldOfView = 60f;
-        EditorApplication.update += Repaint;
-    }
-
-    private void OnDisable()
-    {
-        EditorPrefs.SetString($"{PREFS_PREFIX}TextureFolder", textureFolderPath);
-        EditorPrefs.SetString($"{PREFS_PREFIX}SingleTexture", singleTexturePath);
-        EditorPrefs.SetInt($"{PREFS_PREFIX}Type", (int)clothingType);
-        EditorPrefs.SetString($"{PREFS_PREFIX}MeshPath", AssetDatabase.GetAssetPath(selectedMesh));
-        EditorPrefs.SetString($"{PREFS_PREFIX}EquipAnimPath", AssetDatabase.GetAssetPath(equipAnimation));
-        EditorPrefs.SetString($"{PREFS_PREFIX}UseAnimPath", AssetDatabase.GetAssetPath(useAnimation));
-        EditorPrefs.SetInt($"{PREFS_PREFIX}SelectionMode", (int)selectionMode);
-
-        if (previewRenderUtility != null)
-        {
-            previewRenderUtility.Cleanup();
-            previewRenderUtility = null;
-        }
-        if (previewInstance != null)
-        {
-            DestroyImmediate(previewInstance);
-        }
-        if (previewMaterial != null)
-        {
-            DestroyImmediate(previewMaterial);
-        }
-        EditorApplication.update -= Repaint;
-    }
-
-    private void OnGUI()
-    {
-        GUILayout.Label("Clothing Generator Tool", EditorStyles.boldLabel);
-
-        if (isProcessing)
-        {
-            DisplayProgressBar();
-            return;
+        private enum ClothingType { Shirt, Pants, Vest, Hat, Glasses, Mask, Backpack }
+        private enum SelectionMode { Single, Multiple }
+        private enum ViewportMode { Single, MultiView }
+        private enum ViewAngle { 
+            Front, Back,
+            Left, Right,
+            Top, Bottom,
+            FrontTop, FrontBottom,
+            BackTop, BackBottom,
+            Perspective 
         }
 
-        clothingType = (ClothingType)EditorGUILayout.EnumPopup("Item Type", clothingType);
-        selectionMode = (SelectionMode)EditorGUILayout.EnumPopup("Selection Mode", selectionMode);
-        switch (selectionMode)
+        private ClothingType clothingType = ClothingType.Shirt;
+        private SelectionMode selectionMode = SelectionMode.Multiple;
+        private bool useCustomIconPlacement = false;
+        private int selectedFaceIndex = -1;
+        private Vector3 customIconOffset = Vector3.zero;
+        private Vector3 customIconRotation = Vector3.zero;
+        private string textureFolderPath = "Assets";
+        private string singleTexturePath = "";
+        private string[] availableTexturePaths;
+        private int selectedTextureIndex = -1;
+        private System.Random random = new System.Random();
+        private Mesh selectedMesh;
+        private AnimationClip equipAnimation;
+        private AnimationClip useAnimation;
+        private PreviewRenderUtility previewRenderUtility;
+        private GameObject previewInstance;
+        private Material previewMaterial;
+        private Vector2 previewEulerAngles = new Vector2(30f, 0f);
+        private float previewZoom = 3f;
+        private Vector3 previewPanOffset = Vector3.zero;
+        private bool isDragging = false;
+        private bool isPanning = false;
+        private Vector2 lastMousePosition;
+        private Vector3 lastCameraPosition;
+        private Vector3 lastCameraForward;
+        private const string PREFS_PREFIX = "ClothingGen_";
+        private const string BASE_FOLDER_PATH = "Assets/Clothing";
+        private static readonly int MATERIAL_MODE = Shader.PropertyToID("_Mode");
+        private static readonly int MATERIAL_CUTOFF = Shader.PropertyToID("_Cutoff");
+        private static readonly int MATERIAL_SRC_BLEND = Shader.PropertyToID("_SrcBlend");
+        private static readonly int MATERIAL_DST_BLEND = Shader.PropertyToID("_DstBlend");
+        private static readonly int MATERIAL_ZWRITE = Shader.PropertyToID("_ZWrite");
+        private bool isProcessing = false;
+        private float progress = 0f;
+        private int totalFiles = 0;
+        private int processedFiles = 0;
+        private string currentFileName = "";
+        private CancellationTokenSource cancellationTokenSource;
+        private readonly Dictionary<ClothingType, ClothingTypeInfo> clothingTypeInfoMap;
+        private readonly HashSet<ClothingType> specialTypesSet;
+
+        private Material highlightMaterial;
+        private Color highlightColor = new Color(1f, 0.5f, 0f, 0.8f);
+
+        private string lastPreviewedTexturePath;
+        private Texture2D tempPreviewTexture;
+
+        private ViewportMode viewportMode = ViewportMode.Single;
+        private ViewAngle currentView = ViewAngle.Perspective;
+        private Color backgroundColor = Color.gray;
+        private bool useCustomBackground = false;
+        private Texture2D backgroundTexture;
+        private bool showViewportOptions = false;
+        private Vector2 previewScrollPosition;
+
+        private Dictionary<ViewAngle, Vector3> viewRotations = new Dictionary<ViewAngle, Vector3>()
         {
-            case SelectionMode.Multiple:
-                DisplayMultipleModeControls();
-                break;
-            case SelectionMode.Single:
-                DisplaySingleModeControls();
-                break;
-        }
+            { ViewAngle.Front, new Vector3(0, 180, 0) },
+            { ViewAngle.Back, new Vector3(0, 0, 0) },
+            { ViewAngle.Left, new Vector3(0, 90, 0) },
+            { ViewAngle.Right, new Vector3(0, 270, 0) },
+            { ViewAngle.Top, new Vector3(90, 180, 0) },
+            { ViewAngle.Bottom, new Vector3(-90, 180, 0) },
+            { ViewAngle.FrontTop, new Vector3(45, 180, 0) },
+            { ViewAngle.FrontBottom, new Vector3(-45, 180, 0) },
+            { ViewAngle.BackTop, new Vector3(45, 0, 0) },
+            { ViewAngle.BackBottom, new Vector3(-45, 0, 0) },
+            { ViewAngle.Perspective, new Vector3(30, 225, 0) }
+        };
 
-        selectedMesh = (Mesh)EditorGUILayout.ObjectField("Item", selectedMesh, typeof(Mesh), false);
-        equipAnimation = (AnimationClip)EditorGUILayout.ObjectField("Equip Animation", equipAnimation, typeof(AnimationClip), false);
-        useAnimation = (AnimationClip)EditorGUILayout.ObjectField("Use Animation", useAnimation, typeof(AnimationClip), false);
-
-        if (selectionMode == SelectionMode.Single)
+        private Dictionary<ViewAngle, Vector3> viewPositions = new Dictionary<ViewAngle, Vector3>()
         {
-            GUILayout.Space(10);
-            GUILayout.Label("3D Preview (Drag to Rotate)", EditorStyles.boldLabel);
+            { ViewAngle.Front, new Vector3(0, 0, -2) },
+            { ViewAngle.Back, new Vector3(0, 0, 2) },
+            { ViewAngle.Left, new Vector3(-2, 0, 0) },
+            { ViewAngle.Right, new Vector3(2, 0, 0) },
+            { ViewAngle.Top, new Vector3(0, 2, 0) },
+            { ViewAngle.Bottom, new Vector3(0, -2, 0) },
+            { ViewAngle.FrontTop, new Vector3(0, 1.4f, -1.4f) },
+            { ViewAngle.FrontBottom, new Vector3(0, -1.4f, -1.4f) },
+            { ViewAngle.BackTop, new Vector3(0, 1.4f, 1.4f) },
+            { ViewAngle.BackBottom, new Vector3(0, -1.4f, 1.4f) },
+            { ViewAngle.Perspective, new Vector3(1.4f, 1.4f, -1.4f) }
+        };
 
-            EditorGUILayout.HelpBox("Preview shows actual material settings as they will appear in-game", MessageType.Info);
-
-            Rect previewRect = GUILayoutUtility.GetRect(300, 300, GUILayout.ExpandWidth(true));
-            HandlePreviewDrag(previewRect);
-            DrawPreview(previewRect);
-        }
-
-        if (GUILayout.Button("Generate Item"))
+        public AutoClothingGenerator()
         {
-            switch (selectionMode)
+            clothingTypeInfoMap = new Dictionary<ClothingType, ClothingTypeInfo>
             {
-                case SelectionMode.Multiple:
-                    StartGeneratingAllClothingFromFolder();
-                    break;
-                case SelectionMode.Single:
-                    GenerateClothingFromSingle();
-                    break;
+                { ClothingType.Shirt, new ClothingTypeInfo("Shirts", "shirt.png") },
+                { ClothingType.Pants, new ClothingTypeInfo("Pants", "pants.png") },
+                { ClothingType.Vest, new ClothingTypeInfo("Vests", "vest.png") },
+                { ClothingType.Hat, new ClothingTypeInfo("Hats", "Hat.png") },
+                { ClothingType.Glasses, new ClothingTypeInfo("Glasses", "Glasses.png") },
+                { ClothingType.Mask, new ClothingTypeInfo("Masks", "Mask.png") },
+                { ClothingType.Backpack, new ClothingTypeInfo("Backpacks", "Backpack.png") }
+            };
+
+            specialTypesSet = new HashSet<ClothingType>
+            {
+                ClothingType.Vest,
+                ClothingType.Hat,
+                ClothingType.Glasses,
+                ClothingType.Mask,
+                ClothingType.Backpack
+            };
+        }
+
+        [MenuItem("Tools/Clothing Generator")]
+        public static void ShowWindow()
+        {
+            GetWindow<AutoClothingGenerator>("Clothing Generator");
+        }
+
+        private void OnEnable()
+        {
+            LoadPreferences();
+            InitializePreviewRenderUtility();
+            InitializeHighlightMaterial();
+            EditorApplication.update += Repaint;
+            RefreshAvailableTextures();
+        }
+
+        private void LoadPreferences()
+        {
+            textureFolderPath = EditorPrefs.GetString($"{PREFS_PREFIX}TextureFolder", "Assets");
+            singleTexturePath = EditorPrefs.GetString($"{PREFS_PREFIX}SingleTexture", "");
+            clothingType = (ClothingType)EditorPrefs.GetInt($"{PREFS_PREFIX}Type", 0);
+            selectedMesh = AssetDatabase.LoadAssetAtPath<Mesh>(EditorPrefs.GetString($"{PREFS_PREFIX}MeshPath", ""));
+            equipAnimation = AssetDatabase.LoadAssetAtPath<AnimationClip>(EditorPrefs.GetString($"{PREFS_PREFIX}EquipAnimPath", ""));
+            useAnimation = AssetDatabase.LoadAssetAtPath<AnimationClip>(EditorPrefs.GetString($"{PREFS_PREFIX}UseAnimPath", ""));
+            selectionMode = (SelectionMode)EditorPrefs.GetInt($"{PREFS_PREFIX}SelectionMode", 1);
+        }
+
+        private void InitializePreviewRenderUtility()
+        {
+            if (previewRenderUtility == null)
+            {
+                previewRenderUtility = new PreviewRenderUtility();
+                previewRenderUtility.cameraFieldOfView = 60f;
             }
         }
-    }
 
-    private void DisplayProgressBar()
-    {
-        EditorGUILayout.HelpBox($"Processing {currentFileName}", MessageType.Info);
-
-        Rect progressRect = EditorGUILayout.GetControlRect(false, 20);
-        EditorGUI.ProgressBar(progressRect, progress, $"Processing {processedFiles}/{totalFiles}");
-
-        if (GUILayout.Button("Cancel"))
+        private void InitializeHighlightMaterial()
         {
+            if (highlightMaterial == null)
+            {
+                Shader shader = Shader.Find("Hidden/Internal-Colored");
+                highlightMaterial = new Material(shader);
+                highlightMaterial.hideFlags = HideFlags.HideAndDontSave;
+            }
+        }
+
+        private void OnDisable()
+        {
+            SavePreferences();
+            CleanupResources();
+            EditorApplication.update -= Repaint;
+            if (tempPreviewTexture != null)
+            {
+                DestroyImmediate(tempPreviewTexture);
+                tempPreviewTexture = null;
+            }
+        }
+
+        private void SavePreferences()
+        {
+            EditorPrefs.SetString($"{PREFS_PREFIX}TextureFolder", textureFolderPath);
+            EditorPrefs.SetString($"{PREFS_PREFIX}SingleTexture", singleTexturePath);
+            EditorPrefs.SetInt($"{PREFS_PREFIX}Type", (int)clothingType);
+            EditorPrefs.SetString($"{PREFS_PREFIX}MeshPath", AssetDatabase.GetAssetPath(selectedMesh));
+            EditorPrefs.SetString($"{PREFS_PREFIX}EquipAnimPath", AssetDatabase.GetAssetPath(equipAnimation));
+            EditorPrefs.SetString($"{PREFS_PREFIX}UseAnimPath", AssetDatabase.GetAssetPath(useAnimation));
+            EditorPrefs.SetInt($"{PREFS_PREFIX}SelectionMode", (int)selectionMode);
+        }
+
+        private void CleanupResources()
+        {
+            if (previewRenderUtility != null)
+            {
+                previewRenderUtility.Cleanup();
+                previewRenderUtility = null;
+            }
+
+            if (previewInstance != null)
+            {
+                DestroyImmediate(previewInstance);
+                previewInstance = null;
+            }
+
+            if (previewMaterial != null)
+            {
+                DestroyImmediate(previewMaterial);
+                previewMaterial = null;
+            }
+
+            if (highlightMaterial != null)
+            {
+                DestroyImmediate(highlightMaterial);
+                highlightMaterial = null;
+            }
+
+            CancelProcessing();
+        }
+
+        private void CancelProcessing()
+        {
+            if (cancellationTokenSource != null && !cancellationTokenSource.IsCancellationRequested)
+            {
+                cancellationTokenSource.Cancel();
+                cancellationTokenSource.Dispose();
+                cancellationTokenSource = null;
+            }
+
             isProcessing = false;
-            EditorUtility.ClearProgressBar();
-            Debug.Log("Clothing generation canceled.");
         }
-    }
 
-    private void DisplayMultipleModeControls()
-    {
-        textureFolderPath = EditorGUILayout.TextField("Texture Folder", textureFolderPath);
-        if (GUILayout.Button("Browse Folder"))
+        private void OnGUI()
         {
-            string selected = EditorUtility.OpenFolderPanel("Select PNG Folder", Application.dataPath, "");
-            if (!string.IsNullOrEmpty(selected) && selected.StartsWith(Application.dataPath))
+            using (new EditorGUILayout.VerticalScope())
             {
-                textureFolderPath = "Assets" + selected.Substring(Application.dataPath.Length);
+                GUILayout.Label("Clothing Generator Tool", EditorStyles.boldLabel);
+
+                if (isProcessing)
+                {
+                    DisplayProgressBar();
+                    return;
+                }
+
+                DrawMainControls();
+
+                if (GUILayout.Button("Generate Item"))
+                {
+                    GenerateItems();
+                }
             }
         }
-    }
 
-    private void DisplaySingleModeControls()
-    {
-        Texture2D selectedTexture = (Texture2D)EditorGUILayout.ObjectField("Texture",
-            AssetDatabase.LoadAssetAtPath<Texture2D>(singleTexturePath), typeof(Texture2D), false);
-        if (selectedTexture != null)
+        private void DrawMainControls()
         {
-            singleTexturePath = AssetDatabase.GetAssetPath(selectedTexture);
-        }
-
-        if (GUILayout.Button("Browse Texture"))
-        {
-            string selected = EditorUtility.OpenFilePanel("Select PNG File", Application.dataPath, "png");
-            if (!string.IsNullOrEmpty(selected) && selected.StartsWith(Application.dataPath))
+            using (new EditorGUILayout.VerticalScope())
             {
-                singleTexturePath = "Assets" + selected.Substring(Application.dataPath.Length);
+                clothingType = (ClothingType)EditorGUILayout.EnumPopup("Item Type", clothingType);
+                selectionMode = (SelectionMode)EditorGUILayout.EnumPopup("Selection Mode", selectionMode);
+                useCustomIconPlacement = EditorGUILayout.Toggle("Use Camera Position", useCustomIconPlacement);
+
+                if (selectionMode == SelectionMode.Multiple)
+                {
+                    DisplayMultipleModeControls();
+                    if (availableTexturePaths != null && availableTexturePaths.Length > 0)
+                    {
+                        DrawMultipleModePreview();
+                    }
+                }
+                else
+                {
+                    DisplaySingleModeControls();
+                    DrawSingleModePreview();
+                }
+
+                selectedMesh = (Mesh)EditorGUILayout.ObjectField("Item", selectedMesh, typeof(Mesh), false);
+                equipAnimation = (AnimationClip)EditorGUILayout.ObjectField("Equip Animation", equipAnimation, typeof(AnimationClip), false);
+                useAnimation = (AnimationClip)EditorGUILayout.ObjectField("Use Animation", useAnimation, typeof(AnimationClip), false);
             }
         }
-    }
 
-    private void HandlePreviewDrag(Rect rect)
-    {
-        Event e = Event.current;
-        if (e.type == EventType.MouseDrag && rect.Contains(e.mousePosition))
+        private async void GenerateItems()
         {
-            previewEulerAngles += e.delta;
-            e.Use();
-            Repaint();
-        }
-    }
-
-    private void DrawPreview(Rect rect)
-    {
-        Texture2D previewTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(singleTexturePath);
-        if (previewTexture == null)
-        {
-            EditorGUI.LabelField(rect, "No texture selected for preview.");
-            return;
-        }
-
-        Mesh previewMesh = selectedMesh != null ? selectedMesh : Resources.GetBuiltinResource<Mesh>("Quad.fbx");
-        if (previewMesh == null)
-        {
-            EditorGUI.LabelField(rect, "No mesh available for preview.");
-            return;
-        }
-
-        UpdatePreviewMaterial(previewTexture);
-
-        SetupPreviewInstance(previewMesh, previewMaterial);
-
-
-        previewRenderUtility.BeginPreview(rect, GUIStyle.none);
-
-
-        previewRenderUtility.camera.transform.position = new Vector3(0, 0, -3);
-        previewRenderUtility.camera.transform.rotation = Quaternion.identity;
-        previewRenderUtility.camera.nearClipPlane = 0.1f;
-        previewRenderUtility.camera.farClipPlane = 100f;
-
-
-        previewRenderUtility.camera.clearFlags = CameraClearFlags.Color;
-        previewRenderUtility.camera.backgroundColor = new Color(0.2f, 0.2f, 0.2f, 1.0f);
-
-
-        previewRenderUtility.lights[0].type = LightType.Directional;
-        previewRenderUtility.lights[0].intensity = 1.4f;
-        previewRenderUtility.lights[0].transform.rotation = Quaternion.Euler(50f, 50f, 0);
-        previewRenderUtility.lights[0].color = Color.white;
-
-        previewRenderUtility.lights[1].type = LightType.Point;
-        previewRenderUtility.lights[1].intensity = 0.7f;
-        previewRenderUtility.lights[1].transform.position = new Vector3(0, -3, -2);
-        previewRenderUtility.lights[1].color = new Color(0.7f, 0.7f, 0.8f);
-
-
-        Quaternion objectRotation = Quaternion.Euler(previewEulerAngles.y, previewEulerAngles.x, 0);
-
-        if (EditorApplication.timeSinceStartup % 10 < 5)
-        {
-            float angle = Mathf.Sin((float)(EditorApplication.timeSinceStartup * 0.5f)) * 5f;
-            objectRotation *= Quaternion.Euler(0, angle, 0);
-        }
-
-        previewRenderUtility.DrawMesh(previewMesh, Matrix4x4.TRS(Vector3.zero, objectRotation, Vector3.one), previewMaterial, 0);
-        previewRenderUtility.camera.Render();
-
-        Texture resultRender = previewRenderUtility.EndPreview();
-        GUI.DrawTexture(rect, resultRender, ScaleMode.StretchToFill, false);
-
-
-        EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1), new Color(0.3f, 0.3f, 0.3f));
-        EditorGUI.DrawRect(new Rect(rect.x, rect.y + rect.height - 1, rect.width, 1), new Color(0.3f, 0.3f, 0.3f));
-        EditorGUI.DrawRect(new Rect(rect.x, rect.y, 1, rect.height), new Color(0.3f, 0.3f, 0.3f));
-        EditorGUI.DrawRect(new Rect(rect.x + rect.width - 1, rect.y, 1, rect.height), new Color(0.3f, 0.3f, 0.3f));
-
-
-        ClothingTypeInfo typeInfo = GetClothingTypeInfo(clothingType);
-        string previewLabel = $"{typeInfo.FolderName} Preview";
-        GUIStyle labelStyle = new GUIStyle(EditorStyles.label);
-        labelStyle.normal.textColor = Color.white;
-        labelStyle.alignment = TextAnchor.LowerCenter;
-        EditorGUI.DropShadowLabel(new Rect(rect.x, rect.y + rect.height - 20, rect.width, 20), previewLabel, labelStyle);
-    }
-
-    private void UpdatePreviewMaterial(Texture2D texture)
-    {
-
-        if (previewMaterial == null)
-        {
-            previewMaterial = new Material(Shader.Find("Standard"));
-        }
-
-        previewMaterial.mainTexture = texture;
-        previewMaterial.SetFloat(MATERIAL_MODE, 1);
-        previewMaterial.SetOverrideTag("RenderType", "TransparentCutout");
-        previewMaterial.SetInt(MATERIAL_SRC_BLEND, (int)UnityEngine.Rendering.BlendMode.One);
-        previewMaterial.SetInt(MATERIAL_DST_BLEND, (int)UnityEngine.Rendering.BlendMode.Zero);
-        previewMaterial.SetInt(MATERIAL_ZWRITE, 1);
-        previewMaterial.DisableKeyword("_ALPHABLEND_ON");
-        previewMaterial.EnableKeyword("_ALPHATEST_ON");
-        previewMaterial.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-        previewMaterial.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
-        previewMaterial.SetFloat(MATERIAL_CUTOFF, 0.5f);
-
-
-        previewMaterial.EnableKeyword("_EMISSION");
-        previewMaterial.SetColor("_EmissionColor", Color.white * 0.1f);
-        previewMaterial.SetFloat("_Glossiness", 0.2f);
-    }
-
-    private void SetupPreviewInstance(Mesh mesh, Material material)
-    {
-        if (previewInstance == null)
-        {
-            previewInstance = new GameObject("PreviewInstance");
-        }
-
-        MeshFilter mf = previewInstance.GetComponent<MeshFilter>();
-        if (mf == null)
-            mf = previewInstance.AddComponent<MeshFilter>();
-
-        MeshRenderer mr = previewInstance.GetComponent<MeshRenderer>();
-        if (mr == null)
-            mr = previewInstance.AddComponent<MeshRenderer>();
-
-        mf.sharedMesh = mesh;
-        mr.sharedMaterial = material;
-    }
-
-    private void StartGeneratingAllClothingFromFolder()
-    {
-        Task.Run(() => Directory.GetFiles(textureFolderPath, "*.png", SearchOption.AllDirectories))
-            .ContinueWith(task =>
+            if (selectionMode == SelectionMode.Multiple)
             {
-                string[] pngPaths = task.Result;
+                await GenerateMultipleItems();
+            }
+            else
+            {
+                await GenerateSingleItem();
+            }
+        }
+
+        private async Task GenerateMultipleItems()
+        {
+            cancellationTokenSource = new CancellationTokenSource();
+            try
+            {
+                isProcessing = true;
+                string[] pngPaths = await Task.Run(() => Directory.GetFiles(textureFolderPath, "*.png", SearchOption.AllDirectories));
+
                 if (pngPaths.Length == 0)
                 {
                     Debug.LogWarning("No PNG files found in selected folder.");
                     return;
                 }
-                EditorCoroutine.Start(GenerateClothingAsync(pngPaths));
-            });
-    }
 
-    private IEnumerator GenerateClothingAsync(string[] pngPaths)
-    {
-        isProcessing = true;
-        totalFiles = pngPaths.Length;
-        processedFiles = 0;
-        progress = 0f;
-        EnsureTagExists("Item");
-        EnsureLayerExists("Item");
-        EnsureTagExists("Logic");
-        EnsureLayerExists("Logic");
+                totalFiles = pngPaths.Length;
+                processedFiles = 0;
+                progress = 0f;
 
-        if (RequiresEnemyTagLayer(clothingType))
-        {
-            EnsureTagExists("Enemy");
-            EnsureLayerExists("Enemy");
+                int maxConcurrent = Math.Max(1, Environment.ProcessorCount - 1);
+                using (var semaphore = new SemaphoreSlim(maxConcurrent))
+                {
+                    var tasks = pngPaths.Select(async path =>
+                    {
+                        await semaphore.WaitAsync();
+                        try
+                        {
+                            await ProcessSingleTexture(path);
+                            processedFiles++;
+                            progress = (float)processedFiles / totalFiles;
+                        }
+                        finally
+                        {
+                            semaphore.Release();
+                        }
+                    });
+
+                    await Task.WhenAll(tasks);
+                }
+
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+                Debug.Log($"✅ Generated {processedFiles} clothing item(s).");
+            }
+            catch (OperationCanceledException)
+            {
+                Debug.Log("Operation was canceled.");
+            }
+            finally
+            {
+                isProcessing = false;
+            }
         }
 
-        foreach (var path in pngPaths)
+        private async Task GenerateSingleItem()
         {
-            if (!isProcessing)
-                break;
+            if (string.IsNullOrEmpty(singleTexturePath)) return;
 
-            currentFileName = Path.GetFileNameWithoutExtension(path);
-            Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
-            if (tex == null)
+            isProcessing = true;
+            cancellationTokenSource = new CancellationTokenSource();
+            try
             {
-                processedFiles++;
-                progress = (float)processedFiles / totalFiles;
-                continue;
-            }
-
-            GenerateClothing(tex);
-
-            processedFiles++;
-            progress = (float)processedFiles / totalFiles;
-            yield return null;
-            if (processedFiles % 10 == 0 || processedFiles == totalFiles)
-            {
+                await ProcessSingleTexture(singleTexturePath);
                 AssetDatabase.SaveAssets();
                 AssetDatabase.Refresh();
             }
-        }
-        AssetDatabase.SaveAssets();
-        AssetDatabase.Refresh();
-
-        isProcessing = false;
-        Debug.Log($"✅ Generated {processedFiles} clothing item(s).");
-    }
-
-    private void GenerateClothingFromSingle()
-    {
-        if (string.IsNullOrEmpty(singleTexturePath))
-        {
-            Debug.LogWarning("No PNG file selected.");
-            return;
-        }
-
-        Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(singleTexturePath);
-        if (tex == null)
-        {
-            Debug.LogWarning("Selected PNG could not be loaded.");
-            return;
-        }
-
-        GenerateClothing(tex);
-        AssetDatabase.SaveAssets();
-        AssetDatabase.Refresh();
-        Debug.Log("✅ Generated single clothing item.");
-    }
-
-    private void GenerateClothing(Texture2D selectedTexture)
-    {
-        EnsureTagExists("Item");
-        EnsureLayerExists("Item");
-        EnsureTagExists("Logic");
-        EnsureLayerExists("Logic");
-
-        if (RequiresEnemyTagLayer(clothingType))
-        {
-            EnsureTagExists("Enemy");
-            EnsureLayerExists("Enemy");
-        }
-
-        int itemLayer = LayerMask.NameToLayer("Item");
-        int logicLayer = LayerMask.NameToLayer("Logic");
-        int enemyLayer = LayerMask.NameToLayer("Enemy");
-
-        string originalPath = AssetDatabase.GetAssetPath(selectedTexture);
-        string fileName = Path.GetFileNameWithoutExtension(originalPath);
-
-        ClothingTypeInfo typeInfo = GetClothingTypeInfo(clothingType);
-        string baseFolder = $"{BASE_FOLDER_PATH}/{typeInfo.FolderName}/{fileName}";
-
-        CreateFolderStructure(typeInfo.FolderName, fileName);
-
-        string newImagePath = $"{baseFolder}/{typeInfo.ImageName}";
-        CopyAndConfigureTexture(originalPath, newImagePath);
-
-        Texture2D copiedTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(newImagePath);
-        Material mat = CreateMaterial(copiedTexture, $"{baseFolder}/{fileName}_Mat.mat");
-
-        GameObject clothingObj = CreateClothingObject(fileName, itemLayer, mat);
-        string prefabPath = AssetDatabase.GenerateUniqueAssetPath($"{baseFolder}/Item.prefab");
-        PrefabUtility.SaveAsPrefabAsset(clothingObj, prefabPath);
-        DestroyImmediate(clothingObj);
-
-        CreateAnimationPrefab(baseFolder, logicLayer);
-
-        if (RequiresEnemyTagLayer(clothingType))
-        {
-            CreateSpecialTypeItem(clothingType, fileName, enemyLayer, mat, baseFolder);
-        }
-    }
-
-    private bool RequiresEnemyTagLayer(ClothingType type)
-    {
-        switch (type)
-        {
-            case ClothingType.Vest:
-            case ClothingType.Hat:
-            case ClothingType.Glasses:
-            case ClothingType.Mask:
-            case ClothingType.Backpack:
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    private struct ClothingTypeInfo
-    {
-        public string FolderName;
-        public string ImageName;
-
-        public ClothingTypeInfo(string folderName, string imageName)
-        {
-            FolderName = folderName;
-            ImageName = imageName;
-        }
-    }
-
-    private ClothingTypeInfo GetClothingTypeInfo(ClothingType type)
-    {
-        switch (type)
-        {
-            case ClothingType.Shirt:
-                return new ClothingTypeInfo("Shirts", "shirt.png");
-            case ClothingType.Pants:
-                return new ClothingTypeInfo("Pants", "pants.png");
-            case ClothingType.Vest:
-                return new ClothingTypeInfo("Vests", "vest.png");
-            case ClothingType.Hat:
-                return new ClothingTypeInfo("Hats", "Hat.png");
-            case ClothingType.Glasses:
-                return new ClothingTypeInfo("Glasses", "Glasses.png");
-            case ClothingType.Mask:
-                return new ClothingTypeInfo("Masks", "Mask.png");
-            case ClothingType.Backpack:
-                return new ClothingTypeInfo("Backpacks", "Backpack.png");
-            default:
-                return new ClothingTypeInfo("Items", "item.png");
-        }
-    }
-
-    private void CreateFolderStructure(string typeFolder, string fileName)
-    {
-        if (!AssetDatabase.IsValidFolder(BASE_FOLDER_PATH))
-        {
-            string parentFolder = Path.GetDirectoryName(BASE_FOLDER_PATH);
-            string baseFolderName = Path.GetFileName(BASE_FOLDER_PATH);
-            AssetDatabase.CreateFolder(parentFolder, baseFolderName);
-        }
-
-        if (!AssetDatabase.IsValidFolder($"{BASE_FOLDER_PATH}/{typeFolder}"))
-        {
-            AssetDatabase.CreateFolder(BASE_FOLDER_PATH, typeFolder);
-        }
-
-        string baseFolder = $"{BASE_FOLDER_PATH}/{typeFolder}/{fileName}";
-        if (!AssetDatabase.IsValidFolder(baseFolder))
-        {
-            Directory.CreateDirectory(baseFolder);
-            AssetDatabase.Refresh();
-        }
-    }
-
-    private void CopyAndConfigureTexture(string originalPath, string newPath)
-    {
-        File.Copy(originalPath, newPath, true);
-        AssetDatabase.Refresh();
-
-        TextureImporter textureImporter = AssetImporter.GetAtPath(newPath) as TextureImporter;
-        if (textureImporter != null)
-        {
-            textureImporter.mipmapEnabled = false;
-            textureImporter.filterMode = FilterMode.Point;
-            textureImporter.textureCompression = TextureImporterCompression.CompressedHQ;
-            AssetDatabase.ImportAsset(newPath);
-        }
-    }
-
-    private Material CreateMaterial(Texture2D texture, string assetPath)
-    {
-        Material mat = new Material(Shader.Find("Standard"));
-        mat.mainTexture = texture;
-        mat.SetFloat(MATERIAL_MODE, 1);
-        mat.SetOverrideTag("RenderType", "TransparentCutout");
-        mat.SetInt(MATERIAL_SRC_BLEND, (int)UnityEngine.Rendering.BlendMode.One);
-        mat.SetInt(MATERIAL_DST_BLEND, (int)UnityEngine.Rendering.BlendMode.Zero);
-        mat.SetInt(MATERIAL_ZWRITE, 1);
-        mat.DisableKeyword("_ALPHABLEND_ON");
-        mat.EnableKeyword("_ALPHATEST_ON");
-        mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-        mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
-        mat.SetFloat(MATERIAL_CUTOFF, 0.5f);
-
-        AssetDatabase.CreateAsset(mat, assetPath);
-        return mat;
-    }
-
-    private GameObject CreateClothingObject(string name, int layer, Material material)
-    {
-        GameObject obj = selectedMesh != null
-            ? new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer))
-            : GameObject.CreatePrimitive(PrimitiveType.Quad);
-
-        obj.name = name;
-        obj.layer = layer;
-        obj.tag = "Item";
-
-        if (selectedMesh != null)
-        {
-            obj.GetComponent<MeshFilter>().sharedMesh = selectedMesh;
-            obj.GetComponent<MeshRenderer>().sharedMaterial = material;
-            obj.AddComponent<BoxCollider>();
-        }
-        else
-        {
-            obj.GetComponent<Renderer>().sharedMaterial = material;
-        }
-
-        GameObject icon = new GameObject("Icon");
-        icon.transform.SetParent(obj.transform);
-        icon.transform.localPosition = new Vector3(0, 0, 0.5f);
-        icon.transform.localRotation = Quaternion.Euler(0f, 180f, 90f);
-        icon.layer = layer;
-        icon.tag = "Item";
-
-        return obj;
-    }
-
-    private void CreateAnimationPrefab(string baseFolder, int logicLayer)
-    {
-        if (equipAnimation == null && useAnimation == null)
-            return;
-
-        GameObject animationObject = new GameObject("Animations");
-        Animation anim = animationObject.AddComponent<Animation>();
-
-        if (equipAnimation != null)
-        {
-            anim.AddClip(equipAnimation, "Equip");
-            anim.Play("Equip");
-        }
-
-        if (useAnimation != null)
-        {
-            anim.AddClip(useAnimation, "Use");
-        }
-
-        animationObject.layer = logicLayer;
-        animationObject.tag = "Logic";
-
-        string animPrefabPath = AssetDatabase.GenerateUniqueAssetPath($"{baseFolder}/Animations.prefab");
-        PrefabUtility.SaveAsPrefabAsset(animationObject, animPrefabPath);
-        DestroyImmediate(animationObject);
-    }
-
-    private void CreateSpecialTypeItem(ClothingType type, string fileName, int enemyLayer, Material material, string baseFolder)
-    {
-        string typeName = type.ToString();
-
-        GameObject specialObj = new GameObject(typeName);
-        specialObj.tag = "Enemy";
-        specialObj.layer = enemyLayer;
-
-        BoxCollider boxCollider = specialObj.AddComponent<BoxCollider>();
-        if (selectedMesh != null)
-        {
-            boxCollider.center = selectedMesh.bounds.center;
-            boxCollider.size = selectedMesh.bounds.size;
-        }
-
-        GameObject modelChild = new GameObject("Model_0");
-        modelChild.transform.SetParent(specialObj.transform);
-
-        MeshFilter mf = modelChild.AddComponent<MeshFilter>();
-        MeshRenderer mr = modelChild.AddComponent<MeshRenderer>();
-
-        if (selectedMesh != null)
-        {
-            mf.sharedMesh = selectedMesh;
-            mr.sharedMaterial = material;
-        }
-
-        string specialPrefabPath = AssetDatabase.GenerateUniqueAssetPath($"{baseFolder}/{typeName}.prefab");
-        PrefabUtility.SaveAsPrefabAsset(specialObj, specialPrefabPath);
-        DestroyImmediate(specialObj);
-    }
-
-    private void EnsureTagExists(string tag)
-    {
-        SerializedObject tagManager = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset")[0]);
-        SerializedProperty tagsProp = tagManager.FindProperty("tags");
-        if (!Enumerable.Range(0, tagsProp.arraySize).Any(i => tagsProp.GetArrayElementAtIndex(i).stringValue == tag))
-        {
-            tagsProp.InsertArrayElementAtIndex(0);
-            tagsProp.GetArrayElementAtIndex(0).stringValue = tag;
-            tagManager.ApplyModifiedProperties();
-        }
-    }
-
-    private void EnsureLayerExists(string layerName)
-    {
-        SerializedObject tagManager = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset")[0]);
-        SerializedProperty layersProp = tagManager.FindProperty("layers");
-        bool layerExists = false;
-
-        for (int i = 8; i < layersProp.arraySize; i++)
-        {
-            SerializedProperty sp = layersProp.GetArrayElementAtIndex(i);
-            if (sp.stringValue == layerName)
+            finally
             {
-                layerExists = true;
-                break;
+                isProcessing = false;
+                if (cancellationTokenSource != null)
+                {
+                    cancellationTokenSource.Dispose();
+                    cancellationTokenSource = null;
+                }
             }
         }
 
-        if (!layerExists)
+        private async Task ProcessSingleTexture(string path)
         {
-            for (int i = 8; i < layersProp.arraySize; i++)
+            if (cancellationTokenSource == null || cancellationTokenSource.Token.IsCancellationRequested) return;
+
+            currentFileName = Path.GetFileNameWithoutExtension(path);
+            await Task.Run(() =>
             {
-                SerializedProperty sp = layersProp.GetArrayElementAtIndex(i);
-                if (string.IsNullOrEmpty(sp.stringValue))
+                if (cancellationTokenSource.Token.IsCancellationRequested) return;
+
+                EditorApplication.delayCall += () =>
                 {
-                    sp.stringValue = layerName;
-                    tagManager.ApplyModifiedProperties();
-                    break;
+                    try
+                    {
+                        Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+                        if (tex != null)
+                        {
+                            GenerateClothing(tex);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogError($"Error processing {path}: {ex.Message}");
+                    }
+                };
+            });
+        }
+
+        private void DisplayProgressBar()
+        {
+            EditorGUILayout.HelpBox($"Processing {currentFileName}", MessageType.Info);
+            Rect progressRect = EditorGUILayout.GetControlRect(false, 20);
+            EditorGUI.ProgressBar(progressRect, progress, $"Processing {processedFiles}/{totalFiles}");
+
+            if (GUILayout.Button("Cancel"))
+            {
+                CancelProcessing();
+            }
+        }
+
+        private void DisplayMultipleModeControls()
+        {
+            using (new EditorGUILayout.VerticalScope())
+            {
+                EditorGUI.BeginChangeCheck();
+                textureFolderPath = EditorGUILayout.TextField("Texture Folder", textureFolderPath);
+                
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button("Browse Folder"))
+                    {
+                        string selected = EditorUtility.OpenFolderPanel("Select PNG Folder", Application.dataPath, "");
+                        if (!string.IsNullOrEmpty(selected) && selected.StartsWith(Application.dataPath))
+                        {
+                            textureFolderPath = "Assets" + selected.Substring(Application.dataPath.Length);
+                            RefreshAvailableTextures();
+                        }
+                    }
+
+                    if (GUILayout.Button("Refresh", GUILayout.Width(60)))
+                    {
+                        RefreshAvailableTextures();
+                    }
+
+                    if (GUILayout.Button("Random", GUILayout.Width(60)) && availableTexturePaths != null && availableTexturePaths.Length > 0)
+                    {
+                        selectedTextureIndex = random.Next(0, availableTexturePaths.Length);
+                        Repaint();
+                    }
+                }
+
+                if (availableTexturePaths != null && availableTexturePaths.Length > 0)
+                {
+                    string[] displayNames = availableTexturePaths.Select(Path.GetFileNameWithoutExtension).ToArray();
+                    selectedTextureIndex = EditorGUILayout.Popup("Preview Texture", selectedTextureIndex, displayNames);
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox("No PNG files found in the selected folder.", MessageType.Warning);
+                }
+            }
+        }
+
+        private void DisplaySingleModeControls()
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.PrefixLabel("Texture");
+                Texture2D selectedTexture = EditorGUILayout.ObjectField("Texture", AssetDatabase.LoadAssetAtPath<Texture2D>(singleTexturePath), typeof(Texture2D), false) as Texture2D;
+                if (selectedTexture != null)
+                {
+                    singleTexturePath = AssetDatabase.GetAssetPath(selectedTexture);
+                }
+            }
+
+            if (!string.IsNullOrEmpty(singleTexturePath))
+            {
+                EditorGUILayout.LabelField(Path.GetFileName(singleTexturePath));
+            }
+        }
+
+        private void HandlePreviewInput(Rect rect)
+        {
+            Event e = Event.current;
+            if (!rect.Contains(e.mousePosition)) return;
+
+            Vector2 delta = lastMousePosition != Vector2.zero ? e.mousePosition - lastMousePosition : Vector2.zero;
+            lastMousePosition = e.mousePosition;
+
+         
+
+            if (currentView == ViewAngle.Perspective)
+            {
+                switch (e.type)
+                {
+                    case EventType.MouseDown:
+                        if (e.button == 0) isDragging = true;
+                        else if (e.button == 2) isPanning = true;
+                        e.Use();
+                        break;
+
+                    case EventType.MouseUp:
+                        isDragging = false;
+                        isPanning = false;
+                        e.Use();
+                        break;
+
+                    case EventType.MouseDrag:
+                        if (isDragging) previewEulerAngles += delta * 0.5f;
+                        else if (isPanning) previewPanOffset += new Vector3(delta.x, -delta.y, 0) * 0.01f;
+                        e.Use();
+                        break;
+
+                    case EventType.ScrollWheel:
+                        previewZoom = Mathf.Clamp(previewZoom + e.delta.y * 0.1f, 1f, 10f);
+                        e.Use();
+                        break;
+                }
+            }
+
+            if (e.type != EventType.Layout && e.type != EventType.Repaint)
+            {
+                Repaint();
+            }
+        }
+
+        private void DrawSingleModePreview()
+        {
+            GUILayout.Space(10);
+            
+         
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField("Preview Settings", EditorStyles.boldLabel);
+                
+                using (new EditorGUILayout.HorizontalScope())
+                {
+     
+                    using (new EditorGUILayout.VerticalScope(GUILayout.Width(200)))
+                    {
+                        viewportMode = (ViewportMode)EditorGUILayout.EnumPopup("View Mode", viewportMode);
+                        currentView = (ViewAngle)EditorGUILayout.EnumPopup("Camera Angle", currentView);
+                    }
+
+                    GUILayout.Space(20);
+
+                    using (new EditorGUILayout.VerticalScope(GUILayout.Width(200)))
+                    {
+                        useCustomBackground = EditorGUILayout.Toggle("Custom Background", useCustomBackground);
+                        if (useCustomBackground)
+                        {
+                            backgroundColor = EditorGUILayout.ColorField("Background Color", backgroundColor);
+                            backgroundTexture = (Texture2D)EditorGUILayout.ObjectField("Background Image", backgroundTexture, typeof(Texture2D), false);
+                        }
+                    }
+
+                    GUILayout.FlexibleSpace();
+                }
+
+                GUILayout.Space(5);
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (currentView == ViewAngle.Perspective)
+                    {
+                        if (GUILayout.Button("Reset Camera", GUILayout.Width(100)))
+                        {
+                            ResetPerspectiveView();
+                        }
+                    }
+                    
+                    GUILayout.FlexibleSpace();
+                    
+                    if (GUILayout.Button("Export Preview", GUILayout.Width(100)))
+                    {
+                        ExportPreview();
+                    }
+                }
+            }
+
+            GUILayout.Space(5);
+            EditorGUILayout.HelpBox("Preview shows actual material settings as they will appear in-game", MessageType.Info);
+
+            Rect previewRect = GUILayoutUtility.GetRect(300, 300, GUILayout.ExpandWidth(true));
+            HandlePreviewInput(previewRect);
+            DrawPreview(previewRect);
+        }
+
+        private void DrawMultipleModePreview()
+        {
+            if (selectedTextureIndex < 0 || selectedTextureIndex >= availableTexturePaths.Length) return;
+
+            GUILayout.Space(10);
+            
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField("Preview Settings", EditorStyles.boldLabel);
+                
+                using (new EditorGUILayout.HorizontalScope())
+                {
+
+                    using (new EditorGUILayout.VerticalScope(GUILayout.Width(200)))
+                    {
+                        viewportMode = (ViewportMode)EditorGUILayout.EnumPopup("View Mode", viewportMode);
+                        if (viewportMode == ViewportMode.Single)
+                        {
+                            currentView = (ViewAngle)EditorGUILayout.EnumPopup("Camera Angle", currentView);
+                        }
+                    }
+
+                    GUILayout.Space(20);
+
+                    using (new EditorGUILayout.VerticalScope(GUILayout.Width(200)))
+                    {
+                        useCustomBackground = EditorGUILayout.Toggle("Custom Background", useCustomBackground);
+                        if (useCustomBackground)
+                        {
+                            backgroundColor = EditorGUILayout.ColorField("Background Color", backgroundColor);
+                            backgroundTexture = (Texture2D)EditorGUILayout.ObjectField("Background Image", backgroundTexture, typeof(Texture2D), false);
+                        }
+                    }
+
+                    GUILayout.FlexibleSpace();
+                }
+
+                GUILayout.Space(5);
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (viewportMode == ViewportMode.Single && currentView == ViewAngle.Perspective)
+                    {
+                        if (GUILayout.Button("Reset Camera", GUILayout.Width(100)))
+                        {
+                            ResetPerspectiveView();
+                        }
+                    }
+                    
+                    GUILayout.FlexibleSpace();
+                    
+                    if (GUILayout.Button("Export Preview", GUILayout.Width(100)))
+                    {
+                        ExportPreview();
+                    }
+                }
+            }
+
+            GUILayout.Space(5);
+            EditorGUILayout.HelpBox("Preview shows actual material settings as they will appear in-game", MessageType.Info);
+
+            Rect previewRect = GUILayoutUtility.GetRect(300, 300, GUILayout.ExpandWidth(true));
+            HandlePreviewInput(previewRect);
+
+            string currentTexturePath = availableTexturePaths[selectedTextureIndex];
+            if (Event.current.type == EventType.Repaint)
+            {
+                DrawPreviewForTexture(previewRect, currentTexturePath);
+            }
+        }
+
+        private void SetupPreviewLighting()
+        {
+            if (previewRenderUtility.lights == null || previewRenderUtility.lights.Length == 0) return;
+
+          
+            previewRenderUtility.lights[0].intensity = 0.7f;
+            previewRenderUtility.lights[0].transform.rotation = Quaternion.Euler(0f, 0f, 0f);
+            previewRenderUtility.lights[0].enabled = true;
+            previewRenderUtility.lights[0].shadows = LightShadows.None;
+
+            
+            if (previewRenderUtility.lights.Length > 1)
+            {
+                previewRenderUtility.lights[1].intensity = 0.7f;
+                previewRenderUtility.lights[1].transform.rotation = Quaternion.Euler(180f, 0f, 0f);
+                previewRenderUtility.lights[1].enabled = true;
+                previewRenderUtility.lights[1].shadows = LightShadows.None;
+            }
+
+   
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+            RenderSettings.ambientLight = new Color(0.7f, 0.7f, 0.7f);
+        }
+
+        private void DrawPreview(Rect rect)
+        {
+            if (Event.current.type != EventType.Repaint) return;
+
+            Texture2D previewTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(singleTexturePath);
+            if (previewTexture == null) return;
+
+            UpdatePreviewMaterial(previewTexture);
+
+            if (viewportMode == ViewportMode.MultiView)
+            {
+                DrawMultiViewPreview(rect);
+            }
+            else
+            {
+                DrawPreviewWithAngle(rect, currentView);
+            }
+
+            DrawPreviewControls(rect);
+        }
+
+        private void DrawPreviewForTexture(Rect rect, string texturePath)
+        {
+            Texture2D previewTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
+            if (previewTexture == null) return;
+
+            UpdatePreviewMaterial(previewTexture);
+
+            if (viewportMode == ViewportMode.MultiView)
+            {
+                DrawMultiViewPreview(rect);
+            }
+            else
+            {
+                DrawPreviewWithAngle(rect, currentView);
+            }
+
+            DrawPreviewControls(rect);
+        }
+
+        private void UpdatePreviewMaterial(Texture2D texture)
+        {
+            if (previewMaterial == null)
+            {
+                previewMaterial = new Material(Shader.Find("Standard"));
+                previewMaterial.SetFloat(MATERIAL_MODE, 1);
+                previewMaterial.SetOverrideTag("RenderType", "TransparentCutout");
+                previewMaterial.SetInt(MATERIAL_SRC_BLEND, (int)UnityEngine.Rendering.BlendMode.One);
+                previewMaterial.SetInt(MATERIAL_DST_BLEND, (int)UnityEngine.Rendering.BlendMode.Zero);
+                previewMaterial.SetInt(MATERIAL_ZWRITE, 1);
+                previewMaterial.DisableKeyword("_ALPHABLEND_ON");
+                previewMaterial.EnableKeyword("_ALPHATEST_ON");
+                previewMaterial.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                previewMaterial.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
+                previewMaterial.SetFloat(MATERIAL_CUTOFF, 0.5f);
+            }
+
+            previewMaterial.mainTexture = texture;
+        }
+
+        private void DrawPreviewControls(Rect rect)
+        {
+
+        }
+
+        private void DrawMultiViewPreview(Rect totalRect)
+        {
+            float padding = 2f;
+            float thirdWidth = (totalRect.width - padding * 2) / 3f;
+            float thirdHeight = (totalRect.height - padding * 2) / 3f;
+
+      
+            Rect frontRect = new Rect(totalRect.x + thirdWidth + padding, totalRect.y, thirdWidth, thirdHeight);
+            DrawPreviewWithAngle(frontRect, ViewAngle.Front);
+
+   
+            Rect backRect = new Rect(totalRect.x + thirdWidth + padding, totalRect.y + 2 * (thirdHeight + padding), thirdWidth, thirdHeight);
+            DrawPreviewWithAngle(backRect, ViewAngle.Back);
+
+
+            Rect leftRect = new Rect(totalRect.x, totalRect.y + thirdHeight + padding, thirdWidth, thirdHeight);
+            DrawPreviewWithAngle(leftRect, ViewAngle.Left);
+
+
+            Rect rightRect = new Rect(totalRect.x + 2 * (thirdWidth + padding), totalRect.y + thirdHeight + padding, thirdWidth, thirdHeight);
+            DrawPreviewWithAngle(rightRect, ViewAngle.Right);
+
+            Rect topRect = new Rect(totalRect.x + thirdWidth + padding, totalRect.y, thirdWidth, thirdHeight);
+            DrawPreviewWithAngle(topRect, ViewAngle.Top);
+
+   
+            Rect bottomRect = new Rect(totalRect.x + thirdWidth + padding, totalRect.y + thirdHeight + padding, thirdWidth, thirdHeight);
+            DrawPreviewWithAngle(bottomRect, ViewAngle.Bottom);
+
+      
+            Rect perspectiveRect = new Rect(totalRect.x + 2 * (thirdWidth + padding), totalRect.y + 2 * (thirdHeight + padding), thirdWidth, thirdHeight);
+            DrawPreviewWithAngle(perspectiveRect, ViewAngle.Perspective);
+        }
+
+        private void DrawPreviewWithAngle(Rect rect, ViewAngle angle)
+        {
+     
+            float toolbarHeight = 24;
+            Rect toolbarRect = new Rect(rect.x, rect.y, rect.width, toolbarHeight);
+            Rect previewRect = new Rect(rect.x, rect.y + toolbarHeight, rect.width, rect.height - toolbarHeight);
+
+            EditorGUI.DrawRect(toolbarRect, new Color(0.2f, 0.2f, 0.2f, 1));
+
+            if (angle != ViewAngle.Perspective)
+            {
+                Rect labelRect = new Rect(toolbarRect.x + 5, toolbarRect.y + 4, 100, 16);
+                EditorGUI.LabelField(labelRect, angle.ToString(), EditorStyles.whiteMiniLabel);
+            }
+            else
+            {
+                Rect labelRect = new Rect(toolbarRect.x + 5, toolbarRect.y + 4, 100, 16);
+                EditorGUI.LabelField(labelRect, "Perspective", EditorStyles.whiteMiniLabel);
+
+                Rect controlsRect = new Rect(toolbarRect.x + 80, toolbarRect.y + 4, 200, 16);
+                EditorGUI.LabelField(controlsRect, "Left: Rotate | Middle: Pan | Scroll: Zoom", EditorStyles.whiteMiniLabel);
+            }
+
+            if (Event.current.type != EventType.Repaint) return;
+
+            RenderTexture tempRT = RenderTexture.GetTemporary(
+                (int)previewRect.width,
+                (int)previewRect.height,
+                24,
+                RenderTextureFormat.ARGB32,
+                RenderTextureReadWrite.Linear);
+
+            previewRenderUtility.BeginPreview(previewRect, GUIStyle.none);
+
+
+            GL.Clear(true, true, Color.clear);
+
+            float aspect = previewRect.width / previewRect.height;
+            Matrix4x4 projection = Matrix4x4.Perspective(60f, aspect, 0.01f, 100f);
+            previewRenderUtility.camera.projectionMatrix = projection;
+            previewRenderUtility.camera.clearFlags = CameraClearFlags.SolidColor;
+            previewRenderUtility.camera.backgroundColor = Color.clear;
+
+            if (angle == ViewAngle.Perspective)
+            {
+                Vector3 cameraPosition = new Vector3(0, 0, -previewZoom);
+                cameraPosition = Quaternion.Euler(previewEulerAngles.y, previewEulerAngles.x, 0) * cameraPosition;
+                cameraPosition += previewPanOffset;
+
+                previewRenderUtility.camera.transform.position = cameraPosition;
+                previewRenderUtility.camera.transform.LookAt(previewPanOffset, Vector3.up);
+            }
+            else
+            {
+                Vector3 position = viewPositions[angle];
+                Vector3 rotation = viewRotations[angle];
+                
+                previewRenderUtility.camera.transform.position = position;
+                previewRenderUtility.camera.transform.rotation = Quaternion.Euler(rotation);
+                previewRenderUtility.camera.transform.LookAt(Vector3.zero, Vector3.up);
+            }
+
+            SetupPreviewLighting();
+
+            Mesh previewMesh = selectedMesh != null ? selectedMesh : Resources.GetBuiltinResource<Mesh>("Quad.fbx");
+            if (previewMesh != null)
+            {
+                Matrix4x4 objectMatrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, Vector3.one);
+                previewRenderUtility.DrawMesh(previewMesh, objectMatrix, previewMaterial, 0);
+            }
+
+            previewRenderUtility.camera.Render();
+            
+  
+            Texture previewTexture = previewRenderUtility.EndPreview();
+
+
+            if (useCustomBackground)
+            {
+                if (backgroundTexture != null)
+                {
+                    GUI.DrawTexture(previewRect, backgroundTexture, ScaleMode.StretchToFill);
+                }
+                else
+                {
+                    EditorGUI.DrawRect(previewRect, backgroundColor);
+                }
+            }
+            else
+            {
+
+                EditorGUI.DrawRect(previewRect, new Color(0.3f, 0.3f, 0.3f, 1));
+            }
+
+
+            GUI.DrawTexture(previewRect, previewTexture, ScaleMode.StretchToFill);
+
+            RenderTexture.ReleaseTemporary(tempRT);
+        }
+
+        private void ExportPreview()
+        {
+            string path = EditorUtility.SaveFilePanel(
+                "Save Preview Image",
+                "",
+                "preview.png",
+                "png");
+
+            if (string.IsNullOrEmpty(path)) return;
+
+
+            var originalRT = RenderTexture.active;
+            var originalTargetTexture = previewRenderUtility.camera.targetTexture;
+            var originalClearFlags = previewRenderUtility.camera.clearFlags;
+            var originalBackgroundColor = previewRenderUtility.camera.backgroundColor;
+
+
+            RenderTexture rt = RenderTexture.GetTemporary(1024, 1024, 24, RenderTextureFormat.ARGB32);
+            
+  
+            Texture2D tex = new Texture2D(rt.width, rt.height, TextureFormat.RGBA32, false);
+            
+            try
+            {
+          
+                previewRenderUtility.camera.targetTexture = rt;
+                previewRenderUtility.camera.clearFlags = CameraClearFlags.SolidColor;
+                previewRenderUtility.camera.backgroundColor = useCustomBackground ? backgroundColor : new Color(0.3f, 0.3f, 0.3f, 1);
+
+                float aspect = 1.0f;
+                Matrix4x4 projection = Matrix4x4.Perspective(60f, aspect, 0.01f, 100f);
+                previewRenderUtility.camera.projectionMatrix = projection;
+
+                if (currentView == ViewAngle.Perspective)
+                {
+                    Vector3 cameraPosition = new Vector3(0, 0, -previewZoom);
+                    cameraPosition = Quaternion.Euler(previewEulerAngles.y, previewEulerAngles.x, 0) * cameraPosition;
+                    cameraPosition += previewPanOffset;
+
+                    previewRenderUtility.camera.transform.position = cameraPosition;
+                    previewRenderUtility.camera.transform.LookAt(previewPanOffset, Vector3.up);
+                }
+                else
+                {
+                    previewRenderUtility.camera.transform.position = viewPositions[currentView];
+                    previewRenderUtility.camera.transform.rotation = Quaternion.Euler(viewRotations[currentView]);
+                    previewRenderUtility.camera.transform.LookAt(Vector3.zero, Vector3.up);
+                }
+
+ 
+                SetupPreviewLighting();
+
+        
+                RenderTexture.active = rt;
+                GL.Clear(true, true, useCustomBackground ? backgroundColor : new Color(0.3f, 0.3f, 0.3f, 1));
+
+                if (useCustomBackground && backgroundTexture != null)
+                {
+                    Graphics.Blit(backgroundTexture, rt);
+                }
+
+         
+                if (selectedMesh != null)
+                {
+                    Matrix4x4 objectMatrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, Vector3.one);
+                    previewRenderUtility.DrawMesh(selectedMesh, objectMatrix, previewMaterial, 0);
+                }
+
+         
+                previewRenderUtility.camera.Render();
+
+     
+                RenderTexture.active = rt;
+                tex.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+                tex.Apply();
+
+  
+                byte[] bytes = tex.EncodeToPNG();
+                System.IO.File.WriteAllBytes(path, bytes);
+
+                Debug.Log($"Preview saved to: {path}");
+            }
+            finally
+            {
+    
+                previewRenderUtility.camera.targetTexture = originalTargetTexture;
+                previewRenderUtility.camera.clearFlags = originalClearFlags;
+                previewRenderUtility.camera.backgroundColor = originalBackgroundColor;
+                RenderTexture.active = originalRT;
+
+                RenderTexture.ReleaseTemporary(rt);
+                DestroyImmediate(tex);
+                Repaint();
+            }
+
+            AssetDatabase.Refresh();
+        }
+
+        private void DrawPreviewContent()
+        {
+            float aspect = previewRenderUtility.camera.pixelRect.width / previewRenderUtility.camera.pixelRect.height;
+            Matrix4x4 projection = Matrix4x4.Perspective(60f, aspect, 0.01f, 100f);
+            previewRenderUtility.camera.projectionMatrix = projection;
+
+            SetupPreviewLighting();
+
+            Matrix4x4 objectMatrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, Vector3.one);
+            previewRenderUtility.DrawMesh(
+                selectedMesh != null ? selectedMesh : Resources.GetBuiltinResource<Mesh>("Quad.fbx"),
+                objectMatrix,
+                previewMaterial,
+                0);
+        }
+    
+        private struct ClothingTypeInfo
+        {
+            public string FolderName;
+            public string ImageName;
+
+            public ClothingTypeInfo(string folderName, string imageName)
+            {
+                FolderName = folderName;
+                ImageName = imageName;
+            }
+        }
+
+        private void GenerateClothing(Texture2D selectedTexture)
+        {
+            if (selectedTexture == null)
+                throw new ArgumentNullException(nameof(selectedTexture));
+
+            EnsureTagExists("Item");
+            EnsureLayerExists("Item");
+            EnsureTagExists("Logic");
+            EnsureLayerExists("Logic");
+
+            if (specialTypesSet.Contains(clothingType))
+            {
+                EnsureTagExists("Enemy");
+                EnsureLayerExists("Enemy");
+            }
+
+            string originalPath = AssetDatabase.GetAssetPath(selectedTexture);
+            string fileName = Path.GetFileNameWithoutExtension(originalPath);
+            ClothingTypeInfo typeInfo = clothingTypeInfoMap[clothingType];
+            string baseFolder = $"{BASE_FOLDER_PATH}/{typeInfo.FolderName}/{fileName}";
+
+            CreateFolderStructure(typeInfo.FolderName, fileName);
+            string newImagePath = $"{baseFolder}/{typeInfo.ImageName}";
+            CopyAndConfigureTexture(originalPath, newImagePath);
+
+            Texture2D copiedTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(newImagePath);
+            if (copiedTexture == null)
+                throw new Exception($"Failed to load copied texture at path: {newImagePath}");
+
+            Material mat = CreateMaterial(copiedTexture, $"{baseFolder}/{fileName}_Mat.mat");
+
+            GameObject clothingObj = CreateClothingObject(fileName, LayerMask.NameToLayer("Item"), mat);
+            string prefabPath = AssetDatabase.GenerateUniqueAssetPath($"{baseFolder}/Item.prefab");
+            PrefabUtility.SaveAsPrefabAsset(clothingObj, prefabPath);
+            DestroyImmediate(clothingObj);
+
+            if (equipAnimation != null || useAnimation != null)
+            {
+                CreateAnimationPrefab(baseFolder, LayerMask.NameToLayer("Logic"));
+            }
+
+            if (specialTypesSet.Contains(clothingType))
+            {
+                CreateSpecialTypeItem(clothingType, fileName, LayerMask.NameToLayer("Enemy"), mat, baseFolder);
+            }
+        }
+
+        private void CreateFolderStructure(string typeFolder, string fileName)
+        {
+            if (!AssetDatabase.IsValidFolder(BASE_FOLDER_PATH))
+            {
+                string parentFolder = Path.GetDirectoryName(BASE_FOLDER_PATH);
+                string baseFolderName = Path.GetFileName(BASE_FOLDER_PATH);
+                AssetDatabase.CreateFolder(parentFolder, baseFolderName);
+            }
+
+            string typePath = $"{BASE_FOLDER_PATH}/{typeFolder}";
+            if (!AssetDatabase.IsValidFolder(typePath))
+            {
+                AssetDatabase.CreateFolder(BASE_FOLDER_PATH, typeFolder);
+            }
+
+            string baseFolder = $"{typePath}/{fileName}";
+            if (!AssetDatabase.IsValidFolder(baseFolder))
+            {
+                Directory.CreateDirectory(baseFolder);
+                AssetDatabase.Refresh();
+            }
+        }
+
+        private void CopyAndConfigureTexture(string originalPath, string newPath)
+        {
+            File.Copy(originalPath, newPath, true);
+            AssetDatabase.Refresh();
+
+            TextureImporter textureImporter = AssetImporter.GetAtPath(newPath) as TextureImporter;
+            if (textureImporter != null)
+            {
+                textureImporter.mipmapEnabled = false;
+                textureImporter.filterMode = FilterMode.Point;
+                textureImporter.textureCompression = TextureImporterCompression.CompressedHQ;
+                AssetDatabase.ImportAsset(newPath);
+            }
+        }
+
+        private Material CreateMaterial(Texture2D texture, string assetPath)
+        {
+            Material mat = new Material(Shader.Find("Standard"));
+            mat.mainTexture = texture;
+            mat.SetFloat(MATERIAL_MODE, 1);
+            mat.SetOverrideTag("RenderType", "TransparentCutout");
+            mat.SetInt(MATERIAL_SRC_BLEND, (int)UnityEngine.Rendering.BlendMode.One);
+            mat.SetInt(MATERIAL_DST_BLEND, (int)UnityEngine.Rendering.BlendMode.Zero);
+            mat.SetInt(MATERIAL_ZWRITE, 1);
+            mat.DisableKeyword("_ALPHABLEND_ON");
+            mat.EnableKeyword("_ALPHATEST_ON");
+            mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
+            mat.SetFloat(MATERIAL_CUTOFF, 0.5f);
+
+            AssetDatabase.CreateAsset(mat, assetPath);
+            return mat;
+        }
+
+        private GameObject CreateClothingObject(string name, int layer, Material material)
+        {
+            GameObject obj = selectedMesh != null
+                ? new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer))
+                : GameObject.CreatePrimitive(PrimitiveType.Quad);
+
+            obj.name = name;
+            obj.layer = layer;
+            obj.tag = "Item";
+
+            if (selectedMesh != null)
+            {
+                obj.GetComponent<MeshFilter>().sharedMesh = selectedMesh;
+                obj.GetComponent<MeshRenderer>().sharedMaterial = material;
+                obj.AddComponent<BoxCollider>();
+            }
+            else
+            {
+                obj.GetComponent<Renderer>().sharedMaterial = material;
+            }
+
+            GameObject icon = new GameObject("Icon");
+            icon.transform.SetParent(obj.transform);
+            icon.layer = layer;
+            icon.tag = "Item";
+
+            Vector3 cameraPosition = previewRenderUtility.camera.transform.position;
+            Vector3 relativePos = cameraPosition - previewPanOffset;
+            icon.transform.localPosition = relativePos.normalized;
+            icon.transform.localRotation = Quaternion.LookRotation(-relativePos.normalized);
+
+            return obj;
+        }
+
+        private void CreateAnimationPrefab(string baseFolder, int logicLayer)
+        {
+            GameObject animationObject = new GameObject("Animations");
+            Animation anim = animationObject.AddComponent<Animation>();
+
+            if (equipAnimation != null)
+            {
+                anim.AddClip(equipAnimation, "Equip");
+                anim.Play("Equip");
+            }
+
+            if (useAnimation != null)
+            {
+                anim.AddClip(useAnimation, "Use");
+            }
+
+            animationObject.layer = logicLayer;
+            animationObject.tag = "Logic";
+
+            string animPrefabPath = AssetDatabase.GenerateUniqueAssetPath($"{baseFolder}/Animations.prefab");
+            PrefabUtility.SaveAsPrefabAsset(animationObject, animPrefabPath);
+            DestroyImmediate(animationObject);
+        }
+
+        private void CreateSpecialTypeItem(ClothingType type, string fileName, int enemyLayer, Material material, string baseFolder)
+        {
+            GameObject specialObj = new GameObject(type.ToString());
+            specialObj.tag = "Enemy";
+            specialObj.layer = enemyLayer;
+
+            BoxCollider boxCollider = specialObj.AddComponent<BoxCollider>();
+            if (selectedMesh != null)
+            {
+                boxCollider.center = selectedMesh.bounds.center;
+                boxCollider.size = selectedMesh.bounds.size;
+            }
+
+            GameObject modelChild = new GameObject("Model_0");
+            modelChild.transform.SetParent(specialObj.transform);
+
+            MeshFilter mf = modelChild.AddComponent<MeshFilter>();
+            MeshRenderer mr = modelChild.AddComponent<MeshRenderer>();
+
+            if (selectedMesh != null)
+            {
+                mf.sharedMesh = selectedMesh;
+                mr.sharedMaterial = material;
+            }
+
+            string specialPrefabPath = AssetDatabase.GenerateUniqueAssetPath($"{baseFolder}/{type}.prefab");
+            PrefabUtility.SaveAsPrefabAsset(specialObj, specialPrefabPath);
+            DestroyImmediate(specialObj);
+        }
+
+        private static readonly object tagLock = new object();
+        private void EnsureTagExists(string tag)
+        {
+            lock (tagLock)
+            {
+                SerializedObject tagManager = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset")[0]);
+                SerializedProperty tagsProp = tagManager.FindProperty("tags");
+
+                for (int i = 0; i < tagsProp.arraySize; i++)
+                {
+                    if (tagsProp.GetArrayElementAtIndex(i).stringValue == tag)
+                    {
+                        return;
+                    }
+                }
+
+                tagsProp.InsertArrayElementAtIndex(0);
+                tagsProp.GetArrayElementAtIndex(0).stringValue = tag;
+                tagManager.ApplyModifiedProperties();
+            }
+        }
+
+        private static readonly object layerLock = new object();
+        private void EnsureLayerExists(string layerName)
+        {
+            lock (layerLock)
+            {
+                SerializedObject tagManager = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset")[0]);
+                SerializedProperty layersProp = tagManager.FindProperty("layers");
+
+                for (int i = 8; i < layersProp.arraySize; i++)
+                {
+                    SerializedProperty sp = layersProp.GetArrayElementAtIndex(i);
+                    if (sp.stringValue == layerName)
+                    {
+                        return;
+                    }
+                    if (string.IsNullOrEmpty(sp.stringValue))
+                    {
+                        sp.stringValue = layerName;
+                        tagManager.ApplyModifiedProperties();
+                        return;
+                    }
+                }
+            }
+        }
+
+        private void RefreshAvailableTextures()
+        {
+            if (string.IsNullOrEmpty(textureFolderPath)) return;
+
+            try
+            {
+                availableTexturePaths = Directory.GetFiles(textureFolderPath, "*.png", SearchOption.AllDirectories);
+                if (availableTexturePaths.Length > 0 && selectedTextureIndex == -1)
+                {
+                    selectedTextureIndex = random.Next(0, availableTexturePaths.Length);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Error loading textures: {ex.Message}");
+                availableTexturePaths = new string[0];
+                selectedTextureIndex = -1;
+            }
+        }
+
+        private void ResetPerspectiveView()
+        {
+            previewEulerAngles = new Vector2(30f, 0f);
+            previewZoom = 3f;
+            previewPanOffset = Vector3.zero;
+        }
+    }
+
+    public static class EditorCoroutine
+    {
+        public class Coroutine
+        {
+            public IEnumerator routine;
+            public bool isDone = false;
+            public System.Action onComplete;
+        }
+
+        private static List<Coroutine> activeCoroutines = new List<Coroutine>();
+
+        public static Coroutine Start(IEnumerator routine)
+        {
+            Coroutine coroutine = new Coroutine { routine = routine };
+
+            if (activeCoroutines.Count == 0)
+            {
+                EditorApplication.update += UpdateCoroutines;
+            }
+
+            activeCoroutines.Add(coroutine);
+            return coroutine;
+        }
+
+        private static void UpdateCoroutines()
+        {
+            for (int i = activeCoroutines.Count - 1; i >= 0; i--)
+            {
+                Coroutine coroutine = activeCoroutines[i];
+
+                if (coroutine.isDone || !coroutine.routine.MoveNext())
+                {
+                    activeCoroutines.RemoveAt(i);
+                    coroutine.isDone = true;
+                    coroutine.onComplete?.Invoke();
+                }
+            }
+
+
+            if (activeCoroutines.Count == 0)
+            {
+                EditorApplication.update -= UpdateCoroutines;
+            }
+        }
+
+        public static void StopAll()
+        {
+            foreach (var coroutine in activeCoroutines)
+            {
+                coroutine.isDone = true;
+            }
+
+            activeCoroutines.Clear();
+            EditorApplication.update -= UpdateCoroutines;
+        }
+
+        public static void Stop(Coroutine coroutine)
+        {
+            if (coroutine != null)
+            {
+                coroutine.isDone = true;
+                activeCoroutines.Remove(coroutine);
+
+                if (activeCoroutines.Count == 0)
+                {
+                    EditorApplication.update -= UpdateCoroutines;
                 }
             }
         }
     }
-}
-public static class EditorCoroutine
-{
-    public class Coroutine
-    {
-        public IEnumerator routine;
-    }
-
-    public static Coroutine Start(IEnumerator routine)
-    {
-        Coroutine coroutine = new Coroutine { routine = routine };
-        EditorApplication.update += () => UpdateCoroutine(coroutine);
-        return coroutine;
-    }
-
-    private static void UpdateCoroutine(Coroutine coroutine)
-    {
-        if (coroutine.routine.MoveNext() == false)
-        {
-            EditorApplication.update -= () => UpdateCoroutine(coroutine);
-        }
-    }
-}
