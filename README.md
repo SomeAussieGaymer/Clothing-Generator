@@ -22,7 +22,7 @@ The Auto Clothing Generator is a comprehensive Unity Editor extension designed t
 
 ## Installation
 
-1. Copy the `AutoClothingGenerator.cs` script into your Unity project's `Editor` folder
+1. Copy the `AutoClothingGenerator.cs` script into your Unity project's `Editor/Assembly-CSharp-Editor/Tools` folder
 2. In Unity, navigate to `Tools > Clothing Generator` to open the tool
 
 ## Usage
