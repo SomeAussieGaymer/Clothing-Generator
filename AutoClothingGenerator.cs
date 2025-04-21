@@ -17,9 +17,7 @@
             Front, Back,
             Left, Right,
             Top, Bottom,
-            FrontTop, FrontBottom,
-            BackTop, BackBottom,
-            Perspective 
+            Orbit 
         }
 
         private ClothingType clothingType = ClothingType.Shirt;
@@ -70,7 +68,7 @@
         private Texture2D tempPreviewTexture;
 
         private ViewportMode viewportMode = ViewportMode.Single;
-        private ViewAngle currentView = ViewAngle.Perspective;
+        private ViewAngle currentView = ViewAngle.Orbit;
         private Color backgroundColor = Color.gray;
         private bool useCustomBackground = false;
         private Texture2D backgroundTexture;
@@ -85,11 +83,7 @@
             { ViewAngle.Right, new Vector3(0, 270, 0) },
             { ViewAngle.Top, new Vector3(90, 180, 0) },
             { ViewAngle.Bottom, new Vector3(-90, 180, 0) },
-            { ViewAngle.FrontTop, new Vector3(45, 180, 0) },
-            { ViewAngle.FrontBottom, new Vector3(-45, 180, 0) },
-            { ViewAngle.BackTop, new Vector3(45, 0, 0) },
-            { ViewAngle.BackBottom, new Vector3(-45, 0, 0) },
-            { ViewAngle.Perspective, new Vector3(30, 225, 0) }
+            { ViewAngle.Orbit, new Vector3(30, 225, 0) }
         };
 
         private Dictionary<ViewAngle, Vector3> viewPositions = new Dictionary<ViewAngle, Vector3>()
@@ -100,12 +94,34 @@
             { ViewAngle.Right, new Vector3(2, 0, 0) },
             { ViewAngle.Top, new Vector3(0, 2, 0) },
             { ViewAngle.Bottom, new Vector3(0, -2, 0) },
-            { ViewAngle.FrontTop, new Vector3(0, 1.4f, -1.4f) },
-            { ViewAngle.FrontBottom, new Vector3(0, -1.4f, -1.4f) },
-            { ViewAngle.BackTop, new Vector3(0, 1.4f, 1.4f) },
-            { ViewAngle.BackBottom, new Vector3(0, -1.4f, 1.4f) },
-            { ViewAngle.Perspective, new Vector3(1.4f, 1.4f, -1.4f) }
+            { ViewAngle.Orbit, new Vector3(1.4f, 1.4f, -1.4f) }
         };
+
+        private Dictionary<ViewAngle, Vector3> customCameraPositions = new Dictionary<ViewAngle, Vector3>()
+        {
+            { ViewAngle.Orbit, new Vector3(0, 0, -3f) }
+        };
+
+        private Dictionary<ViewAngle, Vector3> customCameraRotations = new Dictionary<ViewAngle, Vector3>()
+        {
+            { ViewAngle.Orbit, new Vector3(30f, 0f, 0f) }
+        };
+
+        private Dictionary<ViewAngle, bool> useCustomPositions = new Dictionary<ViewAngle, bool>()
+        {
+            { ViewAngle.Front, false },
+            { ViewAngle.Back, false },
+            { ViewAngle.Left, false },
+            { ViewAngle.Right, false },
+            { ViewAngle.Top, false },
+            { ViewAngle.Bottom, false },
+            { ViewAngle.Orbit, false }
+        };
+
+        private bool useCustomOrbitPosition = false;
+
+        private const float MOVEMENT_SPEED = 0.1f;
+        private bool isFocused = false;
 
         public AutoClothingGenerator()
         {
@@ -479,15 +495,26 @@
         private void HandlePreviewInput(Rect rect)
         {
             Event e = Event.current;
-            if (!rect.Contains(e.mousePosition)) return;
+
+            // Check if the preview area is focused
+            if (e.type == EventType.MouseDown && rect.Contains(e.mousePosition))
+            {
+                isFocused = true;
+                EditorGUI.FocusTextInControl(null); // Remove focus from any text field
+            }
+            else if (e.type == EventType.MouseDown && !rect.Contains(e.mousePosition))
+            {
+                isFocused = false;
+            }
+
+            if (!rect.Contains(e.mousePosition) && e.type != EventType.KeyDown && e.type != EventType.KeyUp) return;
 
             Vector2 delta = lastMousePosition != Vector2.zero ? e.mousePosition - lastMousePosition : Vector2.zero;
             lastMousePosition = e.mousePosition;
 
-         
-
-            if (currentView == ViewAngle.Perspective)
+            if (currentView == ViewAngle.Orbit)
             {
+                // Handle mouse input
                 switch (e.type)
                 {
                     case EventType.MouseDown:
@@ -503,15 +530,84 @@
                         break;
 
                     case EventType.MouseDrag:
-                        if (isDragging) previewEulerAngles += delta * 0.5f;
-                        else if (isPanning) previewPanOffset += new Vector3(delta.x, -delta.y, 0) * 0.01f;
+                        if (isDragging)
+                        {
+                            previewEulerAngles += delta * 0.5f;
+                            if (useCustomOrbitPosition)
+                            {
+                                customCameraRotations[ViewAngle.Orbit] = new Vector3(previewEulerAngles.y, previewEulerAngles.x, 0);
+                            }
+                        }
+                        else if (isPanning)
+                        {
+                            previewPanOffset += new Vector3(delta.x, -delta.y, 0) * 0.01f;
+                            UpdateCustomPosition();
+                        }
                         e.Use();
                         break;
 
                     case EventType.ScrollWheel:
                         previewZoom = Mathf.Clamp(previewZoom + e.delta.y * 0.1f, 1f, 10f);
+                        UpdateCustomPosition();
                         e.Use();
                         break;
+                }
+
+                // Handle keyboard input for WASD movement
+                if (isFocused && e.type == EventType.KeyDown)
+                {
+                    Vector3 moveDirection = Vector3.zero;
+                    bool moved = false;
+
+                    switch (e.keyCode)
+                    {
+                        case KeyCode.W:
+                            moveDirection += Vector3.forward;
+                            moved = true;
+                            break;
+                        case KeyCode.S:
+                            moveDirection += Vector3.back;
+                            moved = true;
+                            break;
+                        case KeyCode.A:
+                            moveDirection += Vector3.left;
+                            moved = true;
+                            break;
+                        case KeyCode.D:
+                            moveDirection += Vector3.right;
+                            moved = true;
+                            break;
+                        case KeyCode.Q:
+                            moveDirection += Vector3.down;
+                            moved = true;
+                            break;
+                        case KeyCode.E:
+                            moveDirection += Vector3.up;
+                            moved = true;
+                            break;
+                    }
+
+                    if (moved)
+                    {
+                        // Transform movement direction based on camera rotation
+                        Quaternion rotation = Quaternion.Euler(previewEulerAngles.y, previewEulerAngles.x, 0);
+                        Vector3 rotatedMovement = rotation * moveDirection * MOVEMENT_SPEED;
+
+                        // Apply movement
+                        if (useCustomOrbitPosition)
+                        {
+                            Vector3 newPos = customCameraPositions[ViewAngle.Orbit] + rotatedMovement;
+                            customCameraPositions[ViewAngle.Orbit] = newPos;
+                        }
+                        else
+                        {
+                            previewPanOffset += rotatedMovement;
+                            UpdateCustomPosition();
+                        }
+
+                        e.Use();
+                        Repaint();
+                    }
                 }
             }
 
@@ -521,22 +617,60 @@
             }
         }
 
+        private void UpdateCustomPosition()
+        {
+            if (useCustomOrbitPosition)
+            {
+                Vector3 cameraPosition = new Vector3(0, 0, -previewZoom);
+                cameraPosition = Quaternion.Euler(previewEulerAngles.y, previewEulerAngles.x, 0) * cameraPosition;
+                cameraPosition += previewPanOffset;
+                customCameraPositions[ViewAngle.Orbit] = cameraPosition;
+            }
+        }
+
         private void DrawSingleModePreview()
         {
             GUILayout.Space(10);
             
-         
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 EditorGUILayout.LabelField("Preview Settings", EditorStyles.boldLabel);
                 
                 using (new EditorGUILayout.HorizontalScope())
                 {
-     
                     using (new EditorGUILayout.VerticalScope(GUILayout.Width(200)))
                     {
                         viewportMode = (ViewportMode)EditorGUILayout.EnumPopup("View Mode", viewportMode);
                         currentView = (ViewAngle)EditorGUILayout.EnumPopup("Camera Angle", currentView);
+
+                        if (currentView == ViewAngle.Orbit)
+                        {
+                            EditorGUILayout.Space(5);
+                            useCustomOrbitPosition = EditorGUILayout.ToggleLeft("Use Custom Position", useCustomOrbitPosition);
+                            
+                            if (useCustomOrbitPosition)
+                            {
+                                EditorGUI.indentLevel++;
+                                Vector3 customPos = customCameraPositions[ViewAngle.Orbit];
+                                Vector3 customRot = customCameraRotations[ViewAngle.Orbit];
+                                
+                                EditorGUI.BeginChangeCheck();
+                                customPos = EditorGUILayout.Vector3Field("Position", customPos);
+                                customRot = EditorGUILayout.Vector3Field("Rotation", customRot);
+                                if (EditorGUI.EndChangeCheck())
+                                {
+                                    customCameraPositions[ViewAngle.Orbit] = customPos;
+                                    customCameraRotations[ViewAngle.Orbit] = customRot;
+                                    
+                                    // Simply update the preview angles without additional calculations
+                                    previewEulerAngles = new Vector2(customRot.y, customRot.x);
+                                    previewPanOffset = customPos;
+                                    
+                                    Repaint();
+                                }
+                                EditorGUI.indentLevel--;
+                            }
+                        }
                     }
 
                     GUILayout.Space(20);
@@ -558,11 +692,11 @@
 
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    if (currentView == ViewAngle.Perspective)
+                    if (currentView == ViewAngle.Orbit)
                     {
                         if (GUILayout.Button("Reset Camera", GUILayout.Width(100)))
                         {
-                            ResetPerspectiveView();
+                            ResetOrbitView();
                         }
                     }
                     
@@ -589,20 +723,44 @@
 
             GUILayout.Space(10);
             
-
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 EditorGUILayout.LabelField("Preview Settings", EditorStyles.boldLabel);
                 
                 using (new EditorGUILayout.HorizontalScope())
                 {
-
                     using (new EditorGUILayout.VerticalScope(GUILayout.Width(200)))
                     {
                         viewportMode = (ViewportMode)EditorGUILayout.EnumPopup("View Mode", viewportMode);
-                        if (viewportMode == ViewportMode.Single)
+                        currentView = (ViewAngle)EditorGUILayout.EnumPopup("Camera Angle", currentView);
+
+                        if (currentView == ViewAngle.Orbit)
                         {
-                            currentView = (ViewAngle)EditorGUILayout.EnumPopup("Camera Angle", currentView);
+                            EditorGUILayout.Space(5);
+                            useCustomOrbitPosition = EditorGUILayout.ToggleLeft("Use Custom Position", useCustomOrbitPosition);
+                            
+                            if (useCustomOrbitPosition)
+                            {
+                                EditorGUI.indentLevel++;
+                                Vector3 customPos = customCameraPositions[ViewAngle.Orbit];
+                                Vector3 customRot = customCameraRotations[ViewAngle.Orbit];
+                                
+                                EditorGUI.BeginChangeCheck();
+                                customPos = EditorGUILayout.Vector3Field("Position", customPos);
+                                customRot = EditorGUILayout.Vector3Field("Rotation", customRot);
+                                if (EditorGUI.EndChangeCheck())
+                                {
+                                    customCameraPositions[ViewAngle.Orbit] = customPos;
+                                    customCameraRotations[ViewAngle.Orbit] = customRot;
+                                    
+                                    // Simply update the preview angles without additional calculations
+                                    previewEulerAngles = new Vector2(customRot.y, customRot.x);
+                                    previewPanOffset = customPos;
+                                    
+                                    Repaint();
+                                }
+                                EditorGUI.indentLevel--;
+                            }
                         }
                     }
 
@@ -625,11 +783,11 @@
 
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    if (viewportMode == ViewportMode.Single && currentView == ViewAngle.Perspective)
+                    if (viewportMode == ViewportMode.Single && currentView == ViewAngle.Orbit)
                     {
                         if (GUILayout.Button("Reset Camera", GUILayout.Width(100)))
                         {
-                            ResetPerspectiveView();
+                            ResetOrbitView();
                         }
                     }
                     
@@ -644,6 +802,11 @@
 
             GUILayout.Space(5);
             EditorGUILayout.HelpBox("Preview shows actual material settings as they will appear in-game", MessageType.Info);
+
+            if (currentView == ViewAngle.Orbit)
+            {
+                EditorGUILayout.HelpBox("Left: Rotate | Middle: Pan | Scroll: Zoom | WASD/QE: Move", MessageType.Info);
+            }
 
             Rect previewRect = GUILayoutUtility.GetRect(300, 300, GUILayout.ExpandWidth(true));
             HandlePreviewInput(previewRect);
@@ -750,55 +913,65 @@
             float thirdWidth = (totalRect.width - padding * 2) / 3f;
             float thirdHeight = (totalRect.height - padding * 2) / 3f;
 
-      
+            // Front view
             Rect frontRect = new Rect(totalRect.x + thirdWidth + padding, totalRect.y, thirdWidth, thirdHeight);
             DrawPreviewWithAngle(frontRect, ViewAngle.Front);
 
-   
+            // Back view
             Rect backRect = new Rect(totalRect.x + thirdWidth + padding, totalRect.y + 2 * (thirdHeight + padding), thirdWidth, thirdHeight);
             DrawPreviewWithAngle(backRect, ViewAngle.Back);
 
-
+            // Left view
             Rect leftRect = new Rect(totalRect.x, totalRect.y + thirdHeight + padding, thirdWidth, thirdHeight);
             DrawPreviewWithAngle(leftRect, ViewAngle.Left);
 
-
+            // Right view
             Rect rightRect = new Rect(totalRect.x + 2 * (thirdWidth + padding), totalRect.y + thirdHeight + padding, thirdWidth, thirdHeight);
             DrawPreviewWithAngle(rightRect, ViewAngle.Right);
 
+            // Top view
             Rect topRect = new Rect(totalRect.x + thirdWidth + padding, totalRect.y, thirdWidth, thirdHeight);
             DrawPreviewWithAngle(topRect, ViewAngle.Top);
 
-   
+            // Bottom view
             Rect bottomRect = new Rect(totalRect.x + thirdWidth + padding, totalRect.y + thirdHeight + padding, thirdWidth, thirdHeight);
             DrawPreviewWithAngle(bottomRect, ViewAngle.Bottom);
 
-      
-            Rect perspectiveRect = new Rect(totalRect.x + 2 * (thirdWidth + padding), totalRect.y + 2 * (thirdHeight + padding), thirdWidth, thirdHeight);
-            DrawPreviewWithAngle(perspectiveRect, ViewAngle.Perspective);
+            // Orbit view (with controls)
+            Rect orbitRect = new Rect(totalRect.x + 2 * (thirdWidth + padding), totalRect.y + 2 * (thirdHeight + padding), thirdWidth, thirdHeight);
+            
+            // Handle input for orbit view
+            if (Event.current.type != EventType.Repaint)
+            {
+                HandlePreviewInput(orbitRect);
+            }
+            
+            DrawPreviewWithAngle(orbitRect, ViewAngle.Orbit);
         }
 
         private void DrawPreviewWithAngle(Rect rect, ViewAngle angle)
         {
-     
             float toolbarHeight = 24;
             Rect toolbarRect = new Rect(rect.x, rect.y, rect.width, toolbarHeight);
             Rect previewRect = new Rect(rect.x, rect.y + toolbarHeight, rect.width, rect.height - toolbarHeight);
 
             EditorGUI.DrawRect(toolbarRect, new Color(0.2f, 0.2f, 0.2f, 1));
 
-            if (angle != ViewAngle.Perspective)
+            if (angle == ViewAngle.Orbit)
             {
-                Rect labelRect = new Rect(toolbarRect.x + 5, toolbarRect.y + 4, 100, 16);
-                EditorGUI.LabelField(labelRect, angle.ToString(), EditorStyles.whiteMiniLabel);
+                Rect labelRect = new Rect(toolbarRect.x + 5, toolbarRect.y + 4, 60, 16);
+                EditorGUI.LabelField(labelRect, "Orbit", EditorStyles.whiteMiniLabel);
+
+                if (!useCustomOrbitPosition)
+                {
+                    Rect controlsRect = new Rect(labelRect.xMax + 5, toolbarRect.y + 4, 300, 16);
+                    EditorGUI.LabelField(controlsRect, "Left: Rotate | Middle: Pan | Scroll: Zoom | WASD/QE: Move", EditorStyles.whiteMiniLabel);
+                }
             }
             else
             {
                 Rect labelRect = new Rect(toolbarRect.x + 5, toolbarRect.y + 4, 100, 16);
-                EditorGUI.LabelField(labelRect, "Perspective", EditorStyles.whiteMiniLabel);
-
-                Rect controlsRect = new Rect(toolbarRect.x + 80, toolbarRect.y + 4, 200, 16);
-                EditorGUI.LabelField(controlsRect, "Left: Rotate | Middle: Pan | Scroll: Zoom", EditorStyles.whiteMiniLabel);
+                EditorGUI.LabelField(labelRect, angle.ToString(), EditorStyles.whiteMiniLabel);
             }
 
             if (Event.current.type != EventType.Repaint) return;
@@ -812,7 +985,6 @@
 
             previewRenderUtility.BeginPreview(previewRect, GUIStyle.none);
 
-
             GL.Clear(true, true, Color.clear);
 
             float aspect = previewRect.width / previewRect.height;
@@ -821,14 +993,25 @@
             previewRenderUtility.camera.clearFlags = CameraClearFlags.SolidColor;
             previewRenderUtility.camera.backgroundColor = Color.clear;
 
-            if (angle == ViewAngle.Perspective)
+            if (angle == ViewAngle.Orbit)
             {
-                Vector3 cameraPosition = new Vector3(0, 0, -previewZoom);
-                cameraPosition = Quaternion.Euler(previewEulerAngles.y, previewEulerAngles.x, 0) * cameraPosition;
-                cameraPosition += previewPanOffset;
+                if (useCustomOrbitPosition)
+                {
+                    Vector3 customPos = customCameraPositions[ViewAngle.Orbit];
+                    Vector3 customRot = customCameraRotations[ViewAngle.Orbit];
+                    
+                    previewRenderUtility.camera.transform.position = customPos;
+                    previewRenderUtility.camera.transform.rotation = Quaternion.Euler(customRot);
+                }
+                else
+                {
+                    Vector3 cameraPosition = new Vector3(0, 0, -previewZoom);
+                    cameraPosition = Quaternion.Euler(previewEulerAngles.y, previewEulerAngles.x, 0) * cameraPosition;
+                    cameraPosition += previewPanOffset;
 
-                previewRenderUtility.camera.transform.position = cameraPosition;
-                previewRenderUtility.camera.transform.LookAt(previewPanOffset, Vector3.up);
+                    previewRenderUtility.camera.transform.position = cameraPosition;
+                    previewRenderUtility.camera.transform.LookAt(previewPanOffset, Vector3.up);
+                }
             }
             else
             {
@@ -851,9 +1034,7 @@
 
             previewRenderUtility.camera.Render();
             
-  
             Texture previewTexture = previewRenderUtility.EndPreview();
-
 
             if (useCustomBackground)
             {
@@ -868,10 +1049,8 @@
             }
             else
             {
-
                 EditorGUI.DrawRect(previewRect, new Color(0.3f, 0.3f, 0.3f, 1));
             }
-
 
             GUI.DrawTexture(previewRect, previewTexture, ScaleMode.StretchToFill);
 
@@ -911,7 +1090,7 @@
                 Matrix4x4 projection = Matrix4x4.Perspective(60f, aspect, 0.01f, 100f);
                 previewRenderUtility.camera.projectionMatrix = projection;
 
-                if (currentView == ViewAngle.Perspective)
+                if (currentView == ViewAngle.Orbit)
                 {
                     Vector3 cameraPosition = new Vector3(0, 0, -previewZoom);
                     cameraPosition = Quaternion.Euler(previewEulerAngles.y, previewEulerAngles.x, 0) * cameraPosition;
@@ -1134,10 +1313,20 @@
             icon.layer = layer;
             icon.tag = "Item";
 
-            Vector3 cameraPosition = previewRenderUtility.camera.transform.position;
-            Vector3 relativePos = cameraPosition - previewPanOffset;
-            icon.transform.localPosition = relativePos.normalized;
-            icon.transform.localRotation = Quaternion.LookRotation(-relativePos.normalized);
+            if (useCustomOrbitPosition)
+            {
+                icon.transform.localPosition = customCameraPositions[ViewAngle.Orbit];
+                icon.transform.localRotation = Quaternion.Euler(customCameraRotations[ViewAngle.Orbit]);
+            }
+            else
+            {
+                Vector3 cameraPosition = new Vector3(0, 0, -previewZoom);
+                cameraPosition = Quaternion.Euler(previewEulerAngles.y, previewEulerAngles.x, 0) * cameraPosition;
+                cameraPosition += previewPanOffset;
+                
+                icon.transform.localPosition = cameraPosition;
+                icon.transform.LookAt(obj.transform);
+            }
 
             return obj;
         }
@@ -1181,6 +1370,8 @@
 
             GameObject modelChild = new GameObject("Model_0");
             modelChild.transform.SetParent(specialObj.transform);
+            modelChild.tag = "Enemy";
+            modelChild.layer = enemyLayer;
 
             MeshFilter mf = modelChild.AddComponent<MeshFilter>();
             MeshRenderer mr = modelChild.AddComponent<MeshRenderer>();
@@ -1263,11 +1454,17 @@
             }
         }
 
-        private void ResetPerspectiveView()
+        private void ResetOrbitView()
         {
-            previewEulerAngles = new Vector2(30f, 0f);
+            previewEulerAngles = new Vector2(0f, 30f);
             previewZoom = 3f;
             previewPanOffset = Vector3.zero;
+            
+            Vector3 defaultPos = new Vector3(0, 0, -previewZoom);
+            defaultPos = Quaternion.Euler(previewEulerAngles.y, previewEulerAngles.x, 0) * defaultPos;
+            
+            customCameraPositions[ViewAngle.Orbit] = defaultPos;
+            customCameraRotations[ViewAngle.Orbit] = new Vector3(previewEulerAngles.y, previewEulerAngles.x, 0);
         }
     }
 
