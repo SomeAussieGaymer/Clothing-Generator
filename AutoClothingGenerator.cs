@@ -20,6 +20,7 @@
             Orbit 
         }
 
+
         private ClothingType clothingType = ClothingType.Shirt;
         private SelectionMode selectionMode = SelectionMode.Multiple;
         private bool useCustomIconPlacement = false;
